@@ -382,11 +382,17 @@ class _XiangqiHomePageState extends ConsumerState<XiangqiHomePage> {
                 ),
                 const SizedBox(height: 12),
 
-                // Move history and controls
+                // Move history and controls - only show when not in setup mode
                 Consumer(
                   builder: (context, ref, _) {
                     final st = ref.watch(boardControllerProvider);
                     final ctrl = ref.read(boardControllerProvider.notifier);
+
+                    // Hide move history and controls when in setup mode
+                    if (st.isSetupMode) {
+                      return const SizedBox.shrink();
+                    }
+
                     return Column(
                       children: [
                         Container(
@@ -442,15 +448,22 @@ class _XiangqiHomePageState extends ConsumerState<XiangqiHomePage> {
               ],
               const SizedBox(height: 16),
 
-              // Best moves panel
-              if (_engineInitialized && _showBestMoves) ...[
-                Consumer(
-                  builder: (context, ref, _) {
+              // Best moves panel - only show when not in setup mode
+              Consumer(
+                builder: (context, ref, _) {
+                  final st = ref.watch(boardControllerProvider);
+
+                  // Hide best moves panel when in setup mode
+                  if (st.isSetupMode) {
+                    return const SizedBox.shrink();
+                  }
+
+                  if (_engineInitialized && _showBestMoves) {
                     return SizedBox(height: 220, child: BestMovesPanel());
-                  },
-                ),
-                const SizedBox(height: 32),
-              ],
+                  }
+                  return const SizedBox.shrink();
+                },
+              ),
 
               if (_isLoading)
                 const Padding(

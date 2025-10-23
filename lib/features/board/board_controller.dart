@@ -83,7 +83,10 @@ class BoardState {
   final bool isReplayMode;
   final int replayDelayMs;
   final bool isSetupMode;
-  final Map<String, String> setupPieces; // file,rank -> piece symbol
+  final Map<String, int> setupPieces; // piece symbol -> count available
+  final String? selectedSetupPiece; // currently selected piece for placement
+  final List<String> setupMoveHistory; // FEN history for undo/redo
+  final int setupMoveHistoryPointer; // current position in setup history
   final Offset? arrowFrom;
   final Offset? arrowTo;
   final List<ArrowData> arrows; // all arrows from MultiPV results
@@ -122,6 +125,9 @@ class BoardState {
     this.replayDelayMs = 1000,
     this.isSetupMode = false,
     this.setupPieces = const {},
+    this.selectedSetupPiece,
+    this.setupMoveHistory = const [],
+    this.setupMoveHistoryPointer = 0,
     this.arrowFrom,
     this.arrowTo,
     this.arrows = const <ArrowData>[],
@@ -160,7 +166,10 @@ class BoardState {
     bool? isReplayMode,
     int? replayDelayMs,
     bool? isSetupMode,
-    Map<String, String>? setupPieces,
+    Map<String, int>? setupPieces,
+    String? selectedSetupPiece,
+    List<String>? setupMoveHistory,
+    int? setupMoveHistoryPointer,
     Offset? arrowFrom,
     Offset? arrowTo,
     List<ArrowData>? arrows,
@@ -200,6 +209,10 @@ class BoardState {
       replayDelayMs: replayDelayMs ?? this.replayDelayMs,
       isSetupMode: isSetupMode ?? this.isSetupMode,
       setupPieces: setupPieces ?? this.setupPieces,
+      selectedSetupPiece: selectedSetupPiece ?? this.selectedSetupPiece,
+      setupMoveHistory: setupMoveHistory ?? this.setupMoveHistory,
+      setupMoveHistoryPointer:
+          setupMoveHistoryPointer ?? this.setupMoveHistoryPointer,
       arrowFrom: arrowFrom,
       arrowTo: arrowTo,
       arrows: arrows ?? this.arrows,
@@ -225,7 +238,9 @@ class BoardController extends StateNotifier<BoardState> {
   Timer? _replayTimer;
   Timer? _animationAutoCommit;
   Timer? _animationWatchdog;
+  Timer? _checkmateTimeoutTimer;
   int _replayIndex = 0;
+  int _analysisSeq = 0; // Token để chống chồng lấp phân tích
   List<String> _replayMoves = [];
   String? _recentAppliedMove;
   DateTime? _recentAppliedAt;
@@ -245,7 +260,14 @@ class BoardController extends StateNotifier<BoardState> {
 
   // Board interaction logic from flutter_application_window
   void onBoardTap(int file, int rank) {
-    if (_engine == null) return;
+    AppLogger().log(
+      'onBoardTap called: file=$file, rank=$rank, engine=${_engine != null}',
+    );
+
+    if (_engine == null) {
+      AppLogger().log('Engine is null, cannot process board tap');
+      return;
+    }
 
     AppLogger().log('Board tapped at file: $file, rank: $rank');
 
@@ -921,48 +943,93 @@ class BoardController extends StateNotifier<BoardState> {
 
   // Unified engine turn logic that respects difficulty setting
   Future<void> _engineTurn() async {
-    if (_engine == null || !state.isVsEngineMode || state.gameWinner != null)
+    if (_engine == null || !state.isVsEngineMode || state.gameWinner != null) {
       return;
+    }
+
+    // Guard: Chỉ chạy nếu FEN cho thấy đang là lượt của máy (máy = bên đen trong app)
+    final sideToMove = FenParser.getSideToMove(state.fen); // 'w'|'b'
+    final engineToMove = (sideToMove == 'b');
+    if (!engineToMove) {
+      AppLogger().log(
+        'Engine turn skipped - not engine\'s turn (sideToMove: $sideToMove)',
+      );
+      return;
+    }
 
     try {
       AppLogger().log(
         'Engine turn with difficulty: ${state.vsEngineDifficulty}',
       );
 
-      // Số lượng nước cần phân tích phụ thuộc độ khó
-      final difficulty = state.vsEngineDifficulty ?? 'hard';
-      final engineMultiPv = (difficulty == 'hard')
-          ? 1
-          : 2; // easy/medium cần >=2
+      final startedAt = DateTime.now(); // Bắt đầu đo thời gian nghĩ
+
+      // Số lượng nước cần phân tích - chỉ dùng MultiPV = 2 khi đánh với máy
+      final engineMultiPv = state.isVsEngineMode ? 2 : 1;
 
       // Đồng bộ MultiPV của engine riêng cho lượt máy (không đụng UI)
       await _engine!.setMultiPV(engineMultiPv);
+      await Future.delayed(
+        const Duration(milliseconds: 50),
+      ); // Thay thế waitReady
 
-      // Phân tích vị trí hiện tại để có bestLines mới
+      // Phân tích vị trí hiện tại để có bestLines mới (depth 8 cho máy)
       await analyzeTopMoves(
         engine: _engine!,
         fen: _isFromStartpos() ? 'startpos' : state.setupFen!,
-        depth: state.analysisDepth,
+        depth: 8, // Fixed depth 8 for engine moves
         numMoves: engineMultiPv,
         moves: currentMoves(),
       );
 
       if (state.bestLines.isEmpty) {
-        // fallback chắc chắn: best move
+        // fallback chắc chắn: best move (depth 8 cho máy)
         final bestMove = await _engine!.getBestMove(
           _isFromStartpos() ? 'startpos' : state.setupFen!,
-          state.analysisDepth,
+          8, // Fixed depth 8 for engine moves
         );
-        if (bestMove.isNotEmpty && bestMove != 'null') {
+        // Guard cuối: chỉ đi nếu vẫn tới lượt máy & nước hợp lệ
+        if (bestMove.isNotEmpty &&
+            bestMove != 'null' &&
+            FenParser.getSideToMove(state.fen) == 'b' &&
+            XiangqiRules.isValidMove(state.fen, bestMove)) {
           await _applyEngineMove(bestMove);
+        }
+
+        // Thời gian nghĩ tối thiểu cho fallback case
+        final elapsed = DateTime.now().difference(startedAt);
+        final minThink = const Duration(milliseconds: 250);
+        if (elapsed < minThink) {
+          AppLogger().log(
+            'Engine fallback thinking too fast (${elapsed.inMilliseconds}ms), waiting ${(minThink - elapsed).inMilliseconds}ms more',
+          );
+          await Future.delayed(minThink - elapsed);
         }
         return;
       }
 
       // Chọn nước theo độ khó
       final pick = _selectEngineMove(state.bestLines);
-      if (pick.isNotEmpty && pick != 'null') {
+      // Guard cuối: chỉ đi nếu vẫn tới lượt máy & nước hợp lệ
+      if (pick.isNotEmpty &&
+          pick != 'null' &&
+          FenParser.getSideToMove(state.fen) == 'b' &&
+          XiangqiRules.isValidMove(state.fen, pick)) {
         await _applyEngineMove(pick);
+      } else {
+        // Không có nước đi hợp lệ - game đã kết thúc
+        AppLogger().log('Engine turn: No valid moves available - game ended');
+        // Không cần làm gì thêm vì _checkGameStatusForNoMoves đã xử lý thông báo
+      }
+
+      // Thời gian nghĩ tối thiểu để tránh cảm giác "đi ngay"
+      final elapsed = DateTime.now().difference(startedAt);
+      final minThink = const Duration(milliseconds: 250);
+      if (elapsed < minThink) {
+        AppLogger().log(
+          'Engine thinking too fast (${elapsed.inMilliseconds}ms), waiting ${(minThink - elapsed).inMilliseconds}ms more',
+        );
+        await Future.delayed(minThink - elapsed);
       }
     } catch (e) {
       AppLogger().error('Engine turn failed', e);
@@ -971,7 +1038,25 @@ class BoardController extends StateNotifier<BoardState> {
 
   // Select engine move based on difficulty
   String _selectEngineMove(List<BestLine> bestLines) {
-    if (bestLines.isEmpty) return '';
+    if (bestLines.isEmpty) {
+      AppLogger().log(
+        'No best moves available - checking for checkmate/stalemate',
+      );
+      // Cancel any existing timeout timer
+      _checkmateTimeoutTimer?.cancel();
+
+      // Set timeout to check for checkmate after 1 second
+      _checkmateTimeoutTimer = Timer(const Duration(seconds: 1), () {
+        AppLogger().log('Checkmate timeout triggered - checking game status');
+        _checkGameStatusForNoMoves();
+      });
+
+      return '';
+    }
+
+    // Cancel timeout if we got best moves
+    _checkmateTimeoutTimer?.cancel();
+    _checkmateTimeoutTimer = null;
 
     final difficulty = state.vsEngineDifficulty ?? 'hard';
     AppLogger().log('Selecting move for difficulty: $difficulty');
@@ -1027,15 +1112,28 @@ class BoardController extends StateNotifier<BoardState> {
           return randomMove;
         }
       } else {
-        // Fallback to best move if no legal moves found
-        AppLogger().log('Easy mode: No legal moves found, using best move');
-        return bestLines.first.firstMove;
+        // Không có nước đi hợp lệ nào - có thể là chiếu hết hoặc bí cờ
+        AppLogger().log(
+          'Easy mode: No legal moves found - checking for checkmate/stalemate',
+        );
+        _checkGameStatusForNoMoves();
+        return '';
       }
     }
   }
 
   // Medium: Use lower scoring best move
   String _selectMediumMove(List<BestLine> bestLines) {
+    // Kiểm tra nước đi hợp lệ trước
+    final allLegalMoves = XiangqiRules.getAllLegalMoves(state.fen);
+    if (allLegalMoves.isEmpty) {
+      AppLogger().log(
+        'Medium mode: No legal moves found - checking for checkmate/stalemate',
+      );
+      _checkGameStatusForNoMoves();
+      return '';
+    }
+
     if (bestLines.length >= 2) {
       // Use the move with lower score (worse move)
       final move1 = bestLines[0];
@@ -1055,6 +1153,16 @@ class BoardController extends StateNotifier<BoardState> {
 
   // Hard: Use highest scoring best move
   String _selectHardMove(List<BestLine> bestLines) {
+    // Kiểm tra nước đi hợp lệ trước
+    final allLegalMoves = XiangqiRules.getAllLegalMoves(state.fen);
+    if (allLegalMoves.isEmpty) {
+      AppLogger().log(
+        'Hard mode: No legal moves found - checking for checkmate/stalemate',
+      );
+      _checkGameStatusForNoMoves();
+      return '';
+    }
+
     // Use the best move (highest score)
     final selectedMove = bestLines.first.firstMove;
     AppLogger().log(
@@ -1169,10 +1277,13 @@ class BoardController extends StateNotifier<BoardState> {
         possibleMoves: [],
         isEngineThinking: false,
         isEngineTurn: false, // Switch back to human turn
-        pendingAnimation: null, // ✅ luôn clear ở đây
         engineMoveCount:
             state.engineMoveCount + 1, // Increment engine move count
       );
+
+      // Clear animation after a small delay to prevent flickering
+      await Future.delayed(const Duration(milliseconds: 50));
+      state = state.copyWith(pendingAnimation: null);
 
       // Update engine position without waiting for readyok
       try {
@@ -1224,6 +1335,9 @@ class BoardController extends StateNotifier<BoardState> {
       AppLogger().log('Stopping ongoing engine analysis - user made move');
       try {
         await _engine!.stop(); // Dừng phân tích hiện tại
+        await Future.delayed(
+          const Duration(milliseconds: 50),
+        ); // Thay thế waitReady
       } catch (e) {
         AppLogger().log('Error stopping engine analysis: $e');
       }
@@ -1288,6 +1402,9 @@ class BoardController extends StateNotifier<BoardState> {
     } else {
       await _engine!.setPosition(state.setupFen!, currentMoves());
     }
+    await Future.delayed(
+      const Duration(milliseconds: 50),
+    ); // Thay thế waitReady
 
     // Only NOW clear animation after everything is set
     if (hadAnimation) {
@@ -1356,6 +1473,72 @@ class BoardController extends StateNotifier<BoardState> {
   // Helper method to get current moves for engine
   List<String> currentMoves() {
     return state.moves.take(state.pointer).toList();
+  }
+
+  /// Checks game status when no moves are available (checkmate/stalemate)
+  void _checkGameStatusForNoMoves() {
+    try {
+      AppLogger().log('=== CHECKING GAME STATUS FOR NO MOVES ===');
+      final fen = state.fen;
+
+      // Kiểm tra chiếu hết trước
+      final isInCheck = GameStatusService.isInCheck(fen);
+      final isCheckmate = GameStatusService.isCheckmate(fen);
+      final isStalemate = GameStatusService.isStalemate(fen);
+      final winner = GameStatusService.getWinner(fen);
+
+      AppLogger().log(
+        'No moves available - isInCheck: $isInCheck, isCheckmate: $isCheckmate, isStalemate: $isStalemate, winner: $winner',
+      );
+
+      // Cập nhật state
+      state = state.copyWith(
+        isInCheck: isInCheck,
+        isCheckmate: isCheckmate,
+        isStalemate: isStalemate,
+        gameWinner: winner,
+      );
+
+      // Hiển thị thông báo phù hợp
+      if (isCheckmate) {
+        final sideToMove = FenParser.getSideToMove(fen);
+        final winningPlayer = sideToMove == 'w' ? 'Black' : 'Red';
+        AppLogger().log('*** CHECKMATE DETECTED - $winningPlayer WINS ***');
+        _showNotification(
+          '$winningPlayer WINS! Checkmate!',
+          backgroundColor: Colors.green,
+          duration: const Duration(seconds: 5),
+        );
+      } else if (isStalemate) {
+        AppLogger().log('*** STALEMATE DETECTED ***');
+        _showNotification(
+          'DRAW! Stalemate!',
+          backgroundColor: Colors.blue,
+          duration: const Duration(seconds: 5),
+        );
+      } else if (winner != null && winner != 'Draw') {
+        AppLogger().log('*** KING CAPTURED - $winner WINS ***');
+        _showNotification(
+          '$winner WINS! King captured!',
+          backgroundColor: Colors.green,
+          duration: const Duration(seconds: 5),
+        );
+      } else {
+        // Trường hợp không xác định được - có thể là lỗi engine
+        AppLogger().log('*** UNKNOWN GAME STATE - No moves available ***');
+        _showNotification(
+          'Game state unclear - No moves available',
+          backgroundColor: Colors.red,
+          duration: const Duration(seconds: 3),
+        );
+      }
+    } catch (e, stackTrace) {
+      AppLogger().error(
+        'Error checking game status for no moves',
+        e,
+        stackTrace,
+      );
+    }
   }
 
   /// Checks game status and shows notifications
@@ -1451,10 +1634,21 @@ class BoardController extends StateNotifier<BoardState> {
     if (_engine == null) return;
 
     // Check game status first - if game is over, don't analyze
+    final isCheckmate = GameStatusService.isCheckmate(state.fen);
+    final isStalemate = GameStatusService.isStalemate(state.fen);
     final winner = GameStatusService.getWinner(state.fen);
-    if (winner != null && winner != 'Draw') {
-      AppLogger().log('Game is over: $winner wins - skipping engine analysis');
-      state = state.copyWith(bestLines: [], isEngineThinking: false);
+
+    if (isCheckmate || isStalemate || (winner != null && winner != 'Draw')) {
+      AppLogger().log(
+        'Game is over - checkmate: $isCheckmate, stalemate: $isStalemate, winner: $winner - skipping engine analysis',
+      );
+      state = state.copyWith(
+        bestLines: [],
+        isEngineThinking: false,
+        isCheckmate: isCheckmate,
+        isStalemate: isStalemate,
+        gameWinner: winner,
+      );
       return;
     }
 
@@ -1465,21 +1659,53 @@ class BoardController extends StateNotifier<BoardState> {
       // The engine will naturally stop when we start a new analysis
     }
 
+    // Token để chống chồng lấp phân tích
+    final seq = ++_analysisSeq;
+
     // Clear previous best lines when starting a fresh analysis
     state = state.copyWith(bestLines: [], isEngineThinking: true);
 
+    // Đảm bảo MultiPV đúng theo mode
+    final desired = state.isVsEngineMode ? 2 : 1;
+    if (state.multiPv != desired) {
+      state = state.copyWith(multiPv: desired);
+    }
+
+    // ĐẢM BẢO MultiPV đúng theo UI trước khi phân tích
     try {
-      AppLogger().log('Starting position analysis');
-      await analyzeTopMoves(
-        engine: _engine!,
-        fen: _isFromStartpos() ? 'startpos' : state.setupFen!,
-        depth: state.analysisDepth,
-        numMoves: state.multiPv,
-        moves: currentMoves(),
-      );
+      await _engine!.setMultiPV(state.multiPv);
+      await Future.delayed(
+        const Duration(milliseconds: 50),
+      ); // Thay thế waitReady
+    } catch (_) {}
+
+    try {
+      AppLogger().log('Starting position analysis (seq: $seq)');
+
+      // In setup mode, use current FEN directly without moves
+      if (state.isSetupMode) {
+        await analyzeTopMoves(
+          engine: _engine!,
+          fen: state.fen,
+          depth: state.analysisDepth,
+          numMoves: state.multiPv,
+          moves: [], // No moves in setup mode
+        );
+      } else {
+        await analyzeTopMoves(
+          engine: _engine!,
+          fen: _isFromStartpos() ? 'startpos' : state.setupFen!,
+          depth: state.analysisDepth,
+          numMoves: state.multiPv,
+          moves: currentMoves(),
+        );
+      }
     } catch (e) {
       AppLogger().error('Position analysis failed', e);
-      state = state.copyWith(isEngineThinking: false);
+      // Chỉ cập nhật state nếu đây vẫn là lần phân tích mới nhất
+      if (seq == _analysisSeq) {
+        state = state.copyWith(isEngineThinking: false);
+      }
     }
   }
 
@@ -1524,6 +1750,9 @@ class BoardController extends StateNotifier<BoardState> {
     } else {
       await _engine!.setPosition(newFen, state.moves.take(newPointer).toList());
     }
+    await Future.delayed(
+      const Duration(milliseconds: 50),
+    ); // Thay thế waitReady
     await _analyzePosition();
   }
 
@@ -1568,6 +1797,9 @@ class BoardController extends StateNotifier<BoardState> {
     } else {
       await _engine!.setPosition(newFen, state.moves.take(newPointer).toList());
     }
+    await Future.delayed(
+      const Duration(milliseconds: 50),
+    ); // Thay thế waitReady
     await _analyzePosition();
   }
 
@@ -1659,7 +1891,7 @@ class BoardController extends StateNotifier<BoardState> {
 
     AppLogger().log('Starting vs engine mode with difficulty: $difficulty');
 
-    // Set MultiPV to 2 to get 2 best moves for difficulty selection
+    // Engine + state đều về 2
     await _engine!.setMultiPV(2);
 
     state = state.copyWith(
@@ -1667,6 +1899,7 @@ class BoardController extends StateNotifier<BoardState> {
       isEngineTurn: false, // Human starts first
       vsEngineDifficulty: difficulty,
       gameWinner: null,
+      multiPv: 2, // QUAN TRỌNG: cập nhật state.multiPv
     );
 
     // Start analysis for the current position
@@ -1680,13 +1913,21 @@ class BoardController extends StateNotifier<BoardState> {
 
   void stopVsEngineMode() {
     _vsEngineTimer?.cancel();
+    _checkmateTimeoutTimer?.cancel();
+
+    // Set MultiPV về 1 khi thoát khỏi chế độ đánh với máy
+    if (_engine != null) {
+      _engine!.setMultiPV(1);
+    }
+
     state = state.copyWith(
       isVsEngineMode: false,
       vsEngineDifficulty: null,
       isEngineThinking: false,
+      multiPv: 1, // QUAN TRỌNG: cập nhật state.multiPv
     );
 
-    AppLogger().log('Stopped vs engine mode');
+    AppLogger().log('Stopped vs engine mode - MultiPV reset to 1');
   }
 
   Future<bool> saveCurrentGame(String name, {String? description}) async {
@@ -1775,16 +2016,6 @@ class BoardController extends StateNotifier<BoardState> {
     });
   }
 
-  void enterSetupMode() {
-    state = state.copyWith(isSetupMode: true, setupPieces: {});
-    AppLogger().log('Entered setup mode');
-  }
-
-  void exitSetupMode() {
-    state = state.copyWith(isSetupMode: false, setupPieces: {});
-    AppLogger().log('Exited setup mode');
-  }
-
   void commitAnimatedMove() async {
     final anim = state.pendingAnimation;
     if (anim == null) return;
@@ -1804,21 +2035,45 @@ class BoardController extends StateNotifier<BoardState> {
   List<BestLine> _parseMultiPv(String s) {
     final lines = <BestLine>[];
     for (final raw in s.split('\n')) {
-      if (!raw.contains(' multipv ')) continue;
-      final parts = raw.split(RegExp(r'\s+'));
-      int depth = _findInt(parts, 'depth') ?? 0;
-      int idx = _findInt(parts, 'multipv') ?? 0;
-      int score = _findInt(parts, 'cp') ?? 0;
+      if (!raw.contains(' pv ')) continue; // chỉ cần có pv là đủ
+
+      final parts = raw.trim().split(RegExp(r'\s+'));
+      final depth = _findInt(parts, 'depth') ?? 0;
+
+      // Nếu engine không in "multipv", coi như multipv=1
+      final idx = _findInt(parts, 'multipv') ?? 1;
+
+      // score: ưu tiên cp, nếu không có thì bắt 'mate'
+      final score = _parseScore(parts);
+
       final pvStart = raw.indexOf(' pv ');
-      final pvMoves = pvStart >= 0
+      final pv = pvStart >= 0
           ? raw.substring(pvStart + 4).trim().split(' ')
-          : <String>[];
-      lines.add(
-        BestLine(index: idx, depth: depth, scoreCp: score, pv: pvMoves),
-      );
+          : const <String>[];
+
+      lines.add(BestLine(index: idx, depth: depth, scoreCp: score, pv: pv));
     }
-    lines.sort((a, b) => a.index.compareTo(b.index));
-    return lines;
+
+    // chỉ giữ các dòng trong phạm vi MultiPV yêu cầu
+    final want = state.multiPv;
+    final filtered =
+        lines.where((l) => l.index >= 1 && l.index <= want).toList()
+          ..sort((a, b) => b.scoreCp.compareTo(a.scoreCp));
+    return filtered;
+  }
+
+  int _parseScore(List<String> parts) {
+    final iCp = parts.indexOf('cp');
+    if (iCp >= 0 && iCp + 1 < parts.length) {
+      return int.tryParse(parts[iCp + 1]) ?? 0;
+    }
+    final iMate = parts.indexOf('mate');
+    if (iMate >= 0 && iMate + 1 < parts.length) {
+      final m = int.tryParse(parts[iMate + 1]);
+      // quy ước: mate-in-N ~ 32000 - 2N (dương cho bên tốt hơn)
+      if (m != null) return (m > 0) ? (32000 - 2 * m) : (-32000 - 2 * m);
+    }
+    return 0;
   }
 
   int? _findInt(List<String> parts, String key) {
@@ -1855,6 +2110,7 @@ class BoardController extends StateNotifier<BoardState> {
     List<String>? moves,
   }) async {
     final movesToAnalyze = numMoves ?? state.multiPv;
+    final currentSeq = _analysisSeq; // Lưu token hiện tại
     state = state.copyWith(analyzing: true, error: null, bestLines: []);
 
     try {
@@ -1868,6 +2124,12 @@ class BoardController extends StateNotifier<BoardState> {
         moves,
       );
       final allLines = _parseMultiPv(result);
+
+      if (allLines.isEmpty) {
+        AppLogger().log(
+          'No lines parsed. Maybe MultiPV=1 without tag or endgame. Raw result: $result',
+        );
+      }
 
       // Group by multipv index and take only the latest depth for each multipv
       final Map<int, BestLine> latestLines = {};
@@ -1898,21 +2160,27 @@ class BoardController extends StateNotifier<BoardState> {
       }
 
       AppLogger().log(
-        'Analysis completed: ${lines.length} lines, ${arrows.length} arrows',
+        'Analysis completed: ${lines.length} lines, ${arrows.length} arrows (seq: $currentSeq)',
       );
-      state = state.copyWith(
-        analyzing: false,
-        bestLines: lines,
-        arrows: arrows,
-        isEngineThinking: false,
-      );
+      // Chỉ cập nhật state nếu đây vẫn là lần phân tích mới nhất
+      if (currentSeq == _analysisSeq) {
+        state = state.copyWith(
+          analyzing: false,
+          bestLines: lines,
+          arrows: arrows,
+          isEngineThinking: false,
+        );
+      }
     } catch (e, st) {
       AppLogger().error('BoardController analyze error', e, st);
-      state = state.copyWith(
-        analyzing: false,
-        error: e.toString(),
-        isEngineThinking: false,
-      );
+      // Chỉ cập nhật state nếu đây vẫn là lần phân tích mới nhất
+      if (currentSeq == _analysisSeq) {
+        state = state.copyWith(
+          analyzing: false,
+          error: e.toString(),
+          isEngineThinking: false,
+        );
+      }
     }
   }
 
@@ -1922,11 +2190,351 @@ class BoardController extends StateNotifier<BoardState> {
   }
 
   void setSettings(int depth, int multiPV) {
-    state = state.copyWith(analysisDepth: depth, multiPv: multiPV);
+    // Ép MultiPV theo mode: nếu đang đánh với máy thì phải là 2
+    final effectiveMultiPv = state.isVsEngineMode ? 2 : multiPV;
+
+    state = state.copyWith(analysisDepth: depth, multiPv: effectiveMultiPv);
+
+    if (_engine != null) {
+      _engine!.setMultiPV(effectiveMultiPv);
+    }
   }
 
   Future<void> setRedAtBottom(bool isRedAtBottom) async {
     state = state.copyWith(isRedAtBottom: isRedAtBottom);
+  }
+
+  // Setup mode methods
+  void enterSetupMode() {
+    AppLogger().log('Entering setup mode');
+
+    // Initialize setup pieces (standard Xiangqi set)
+    final setupPieces = <String, int>{
+      'R': 2, 'H': 2, 'E': 2, 'A': 2, 'K': 1, 'C': 2, 'P': 5, // Red pieces
+      'r': 2, 'h': 2, 'e': 2, 'a': 2, 'k': 1, 'c': 2, 'p': 5, // Black pieces
+    };
+
+    state = state.copyWith(
+      isSetupMode: true,
+      setupPieces: setupPieces,
+      selectedSetupPiece: null,
+      fen: '9/9/9/9/9/9/9/9/9/9 w', // Empty board
+      moves: const [], // Clear moves history when entering setup
+      pointer: 0,
+      redToMove: true,
+      bestLines: const [], // Clear previous analysis arrows
+      setupMoveHistory: [
+        '9/9/9/9/9/9/9/9/9/9 w',
+      ], // Initialize with empty board
+      setupMoveHistoryPointer: 0,
+    );
+  }
+
+  void exitSetupMode() {
+    AppLogger().log('Exiting setup mode');
+    state = state.copyWith(
+      isSetupMode: false,
+      setupPieces: const {},
+      selectedSetupPiece: null,
+    );
+  }
+
+  void resetFromSetup() {
+    AppLogger().log('Resetting from setup - clearing all history');
+    state = state.copyWith(
+      isSetupMode: false,
+      setupPieces: const {},
+      selectedSetupPiece: null,
+      moves: const [],
+      pointer: 0,
+      bestLines: const [],
+    );
+  }
+
+  void selectSetupPiece(String piece) {
+    if (state.setupPieces[piece] != null && state.setupPieces[piece]! > 0) {
+      // If clicking the same piece that's already selected, deselect it
+      if (state.selectedSetupPiece == piece) {
+        AppLogger().log('Deselected setup piece: $piece');
+        state = state.copyWith(selectedSetupPiece: null);
+      } else {
+        // Select the new piece
+        AppLogger().log('Selected setup piece: $piece');
+        state = state.copyWith(selectedSetupPiece: piece);
+      }
+    }
+  }
+
+  void placePieceOnBoard(int file, int rank) {
+    if (!state.isSetupMode || state.selectedSetupPiece == null) return;
+
+    final piece = state.selectedSetupPiece!;
+    final currentFen = state.fen;
+    final board = FenParser.parseBoard(currentFen);
+
+    // Check if square is empty
+    if (board[rank][file].isNotEmpty) {
+      return;
+    }
+
+    // Check if we have pieces available to place
+    final availableCount = state.setupPieces[piece] ?? 0;
+    if (availableCount <= 0) {
+      AppLogger().log('No more $piece pieces available to place');
+      return;
+    }
+
+    // Place piece on board
+    board[rank][file] = piece;
+    final newFen = FenParser.boardToFen(board, state.redToMove ? 'w' : 'b');
+
+    // Update setup pieces count
+    final newSetupPieces = Map<String, int>.from(state.setupPieces);
+    newSetupPieces[piece] = (newSetupPieces[piece] ?? 0) - 1;
+
+    AppLogger().log('Placed $piece at ($file, $rank)');
+
+    // Add to setup move history
+    final newHistory = List<String>.from(state.setupMoveHistory);
+    // Remove any future history if we're not at the end
+    if (state.setupMoveHistoryPointer < newHistory.length - 1) {
+      newHistory.removeRange(
+        state.setupMoveHistoryPointer + 1,
+        newHistory.length,
+      );
+    }
+    newHistory.add(newFen);
+
+    state = state.copyWith(
+      fen: newFen,
+      setupPieces: newSetupPieces,
+      selectedSetupPiece: newSetupPieces[piece] == 0
+          ? null
+          : state.selectedSetupPiece,
+      setupMoveHistory: newHistory,
+      setupMoveHistoryPointer: newHistory.length - 1,
+    );
+  }
+
+  void removePieceFromBoard(int file, int rank) {
+    if (!state.isSetupMode) return;
+
+    final currentFen = state.fen;
+    final board = FenParser.parseBoard(currentFen);
+    final piece = board[rank][file];
+
+    if (piece.isEmpty) return;
+
+    // Remove piece from board
+    board[rank][file] = '';
+    final newFen = FenParser.boardToFen(board, state.redToMove ? 'w' : 'b');
+
+    // Return piece to setup pieces
+    final newSetupPieces = Map<String, int>.from(state.setupPieces);
+    newSetupPieces[piece] = (newSetupPieces[piece] ?? 0) + 1;
+
+    AppLogger().log('Removed $piece from ($file, $rank)');
+
+    // Add to setup move history
+    final newHistory = List<String>.from(state.setupMoveHistory);
+    // Remove any future history if we're not at the end
+    if (state.setupMoveHistoryPointer < newHistory.length - 1) {
+      newHistory.removeRange(
+        state.setupMoveHistoryPointer + 1,
+        newHistory.length,
+      );
+    }
+    newHistory.add('remove:$piece:$file:$rank');
+
+    state = state.copyWith(
+      fen: newFen,
+      setupPieces: newSetupPieces,
+      setupMoveHistory: newHistory,
+      setupMoveHistoryPointer: newHistory.length - 1,
+    );
+  }
+
+  void startGameFromSetup() {
+    if (!state.isSetupMode) return;
+
+    AppLogger().log('Starting game from setup position');
+
+    // Validate setup (must have exactly one king of each color)
+    final board = FenParser.parseBoard(state.fen);
+    int redKings = 0, blackKings = 0;
+
+    for (int rank = 0; rank < 10; rank++) {
+      for (int file = 0; file < 9; file++) {
+        final piece = board[rank][file];
+        if (piece == 'K') redKings++;
+        if (piece == 'k') blackKings++;
+      }
+    }
+
+    if (redKings != 1 || blackKings != 1) {
+      _showNotification(
+        'Invalid setup: Must have exactly one king of each color',
+        backgroundColor: Colors.red,
+        duration: const Duration(seconds: 3),
+      );
+      return;
+    }
+
+    // Check if the setup position is already checkmate/stalemate
+    final isCheckmate = GameStatusService.isCheckmate(state.fen);
+    final isStalemate = GameStatusService.isStalemate(state.fen);
+    final winner = GameStatusService.getWinner(state.fen);
+
+    if (isCheckmate) {
+      final sideToMove = FenParser.getSideToMove(state.fen);
+      final winningPlayer = sideToMove == 'w' ? 'Black' : 'Red';
+      _showNotification(
+        'Setup position is already checkmate! $winningPlayer wins.',
+        backgroundColor: Colors.orange,
+        duration: const Duration(seconds: 4),
+      );
+      return;
+    }
+
+    if (isStalemate) {
+      _showNotification(
+        'Setup position is already stalemate! Game is a draw.',
+        backgroundColor: Colors.blue,
+        duration: const Duration(seconds: 4),
+      );
+      return;
+    }
+
+    if (winner != null && winner != 'Draw') {
+      _showNotification(
+        'Setup position already has a winner: $winner',
+        backgroundColor: Colors.orange,
+        duration: const Duration(seconds: 4),
+      );
+      return;
+    }
+
+    // Exit setup mode and start game
+    state = state.copyWith(
+      isSetupMode: false,
+      setupPieces: const {},
+      selectedSetupPiece: null,
+      moves: const [], // Start fresh moves history from setup position
+      pointer: 0,
+      setupFen: state.fen, // Save setup FEN as starting position
+      bestLines: const [], // Clear any previous analysis arrows
+    );
+
+    // Reset engine to ensure clean state
+    if (_engine != null) {
+      _engine!.newGame();
+    }
+
+    // Trigger engine analysis for the new position
+    _analyzePosition();
+
+    _showNotification(
+      'Game started from setup position',
+      backgroundColor: Colors.green,
+      duration: const Duration(seconds: 2),
+    );
+  }
+
+  bool canUndoSetupMove() {
+    return state.setupMoveHistoryPointer > 0;
+  }
+
+  bool canRedoSetupMove() {
+    return state.setupMoveHistoryPointer < state.setupMoveHistory.length - 1;
+  }
+
+  void undoSetupMove() {
+    if (!canUndoSetupMove()) return;
+
+    AppLogger().log('Undoing setup move');
+    final newPointer = state.setupMoveHistoryPointer - 1;
+    final newFen = state.setupMoveHistory[newPointer];
+
+    // Calculate which pieces need to be returned to the selection bar
+    final currentBoard = FenParser.parseBoard(state.fen);
+    final previousBoard = FenParser.parseBoard(newFen);
+
+    // Find pieces that were removed (present in current but not in previous)
+    final newSetupPieces = Map<String, int>.from(state.setupPieces);
+
+    for (int rank = 0; rank < 10; rank++) {
+      for (int file = 0; file < 9; file++) {
+        final currentPiece = currentBoard[rank][file];
+        final previousPiece = previousBoard[rank][file];
+
+        // If piece was removed (was in current, is not in previous)
+        if (currentPiece.isNotEmpty && previousPiece.isEmpty) {
+          newSetupPieces[currentPiece] =
+              (newSetupPieces[currentPiece] ?? 0) + 1;
+          AppLogger().log('Returned piece $currentPiece to selection bar');
+        }
+      }
+    }
+
+    state = state.copyWith(
+      setupMoveHistoryPointer: newPointer,
+      fen: newFen,
+      setupPieces: newSetupPieces,
+    );
+  }
+
+  void redoSetupMove() {
+    if (!canRedoSetupMove()) return;
+
+    AppLogger().log('Redoing setup move');
+    final newPointer = state.setupMoveHistoryPointer + 1;
+    final newFen = state.setupMoveHistory[newPointer];
+
+    // Calculate which pieces need to be removed from the selection bar
+    final currentBoard = FenParser.parseBoard(state.fen);
+    final nextBoard = FenParser.parseBoard(newFen);
+
+    // Find pieces that were added (present in next but not in current)
+    final newSetupPieces = Map<String, int>.from(state.setupPieces);
+
+    for (int rank = 0; rank < 10; rank++) {
+      for (int file = 0; file < 9; file++) {
+        final currentPiece = currentBoard[rank][file];
+        final nextPiece = nextBoard[rank][file];
+
+        // If piece was added (was not in current, is in next)
+        if (currentPiece.isEmpty && nextPiece.isNotEmpty) {
+          newSetupPieces[nextPiece] = (newSetupPieces[nextPiece] ?? 0) - 1;
+          AppLogger().log('Removed piece $nextPiece from selection bar');
+        }
+      }
+    }
+
+    state = state.copyWith(
+      setupMoveHistoryPointer: newPointer,
+      fen: newFen,
+      setupPieces: newSetupPieces,
+    );
+  }
+
+  void resetSetupBoard() {
+    if (!state.isSetupMode) return;
+
+    AppLogger().log('Resetting setup board');
+
+    // Initialize setup pieces (standard Xiangqi set) - trả lại tất cả quân cờ
+    final setupPieces = <String, int>{
+      'R': 2, 'H': 2, 'E': 2, 'A': 2, 'K': 1, 'C': 2, 'P': 5, // Red pieces
+      'r': 2, 'h': 2, 'e': 2, 'a': 2, 'k': 1, 'c': 2, 'p': 5, // Black pieces
+    };
+
+    state = state.copyWith(
+      fen: '9/9/9/9/9/9/9/9/9/9 w', // Empty board
+      setupMoveHistory: ['9/9/9/9/9/9/9/9/9/9 w'],
+      setupMoveHistoryPointer: 0,
+      selectedSetupPiece: null,
+      setupPieces: setupPieces, // Trả lại tất cả quân cờ
+    );
   }
 
   @override

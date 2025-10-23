@@ -169,10 +169,12 @@ class XiangqiRules {
     // Elephant cannot cross the river
     final isRedElephant =
         board[fromRank][fromFile] == board[fromRank][fromFile].toUpperCase();
-    if (isRedElephant && toRank < 5)
+    if (isRedElephant && toRank < 5) {
       return false; // Red elephant cannot cross river
-    if (!isRedElephant && toRank > 4)
+    }
+    if (!isRedElephant && toRank > 4) {
       return false; // Black elephant cannot cross river
+    }
 
     return true;
   }

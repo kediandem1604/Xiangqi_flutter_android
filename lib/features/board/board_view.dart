@@ -104,6 +104,11 @@ class _BoardViewState extends ConsumerState<BoardView>
     final state = ref.watch(boardControllerProvider);
     final controller = ref.read(boardControllerProvider.notifier);
 
+    // Show setup mode UI if in setup mode
+    if (state.isSetupMode) {
+      return _buildSetupModeUI(state, controller);
+    }
+
     return AspectRatio(
       aspectRatio: 9 / 10,
       child: LayoutBuilder(
@@ -172,16 +177,16 @@ class _BoardViewState extends ConsumerState<BoardView>
                     FadeTransition(
                       opacity: _fade,
                       child: CustomPaint(
-                      painter: _ArrowPainter(
+                        painter: _ArrowPainter(
                           arrows: widget.arrows,
-                        cellWidth: cellW,
-                        cellHeight: cellH,
+                          cellWidth: cellW,
+                          cellHeight: cellH,
                           originX: originX,
                           originY: originY,
                           isRedAtBottom: state.isRedAtBottom,
+                        ),
+                        child: Container(),
                       ),
-                      child: Container(),
-                    ),
                     ),
                   // QUÂN CỜ: chỉ hiển thị khi _piecesReady
                   if (_piecesReady && widget.showStartPosition)
@@ -205,15 +210,15 @@ class _BoardViewState extends ConsumerState<BoardView>
 
                   // ANIMATION DI CHUYỂN QUÂN: cũng nên chờ _piecesReady
                   if (_piecesReady)
-                  _buildMoveAnimation(
-                    state,
+                    _buildMoveAnimation(
+                      state,
                       Size(constraints.maxWidth, constraints.maxHeight),
                       ref,
                       cellW,
                       cellH,
                       originX,
                       originY,
-                  ),
+                    ),
                   // Gesture detector for piece interaction
                   GestureDetector(
                     onTapDown: (details) => _onBoardTap(
@@ -326,6 +331,7 @@ class _BoardViewState extends ConsumerState<BoardView>
     );
 
     return _AnimatedPiece(
+      key: ValueKey('anim-${anim.moveUci}-${state.pointer}'),
       asset: _getPieceAsset(anim.piece),
       size: pieceSize,
       start: start,
@@ -358,6 +364,7 @@ class _AnimatedPiece extends StatefulWidget {
   final VoidCallback onCompleted;
 
   const _AnimatedPiece({
+    super.key,
     required this.asset,
     required this.size,
     required this.start,
@@ -425,6 +432,9 @@ class _AnimatedPieceState extends State<_AnimatedPiece>
               opacity: _opacity.value,
               child: SvgPicture.asset(
                 widget.asset!,
+                key: ValueKey(
+                  'anim-svg-${widget.asset}-${widget.start}-${widget.end}',
+                ),
                 width: widget.size,
                 height: widget.size,
               ),
@@ -458,10 +468,10 @@ class _ArrowPainter extends CustomPainter {
     // Draw arrows with colors based on score
     for (int i = 0; i < arrows.length; i++) {
       final arrowData = arrows[i];
-    final paint = Paint()
+      final paint = Paint()
         ..color = _getArrowColor(arrowData.scoreCp)
         ..strokeWidth = _getArrowWidth(arrowData.scoreCp)
-      ..style = PaintingStyle.stroke;
+        ..style = PaintingStyle.stroke;
 
       // Tính opacity dựa trên thứ tự nước đi (arrowIndex)
       final opacity = _getArrowOpacity(arrowData.scoreCp, i);
@@ -551,7 +561,7 @@ List<Widget> _buildPiecesFromFen(
       final piece = board[rank][file];
       if (piece.isNotEmpty) {
         // During animation, hide the piece at source and any captured piece at destination
-    if (state.pendingAnimation != null) {
+        if (state.pendingAnimation != null) {
           if ((file == state.pendingAnimation!.fromFile &&
                   rank == state.pendingAnimation!.fromRank) ||
               (file == state.pendingAnimation!.toFile &&
@@ -566,7 +576,7 @@ List<Widget> _buildPiecesFromFen(
 
         final isSelected =
             state.selectedFile == file && state.selectedRank == rank;
-    final pieceSize = (cellW * 0.8).clamp(30.0, 60.0);
+        final pieceSize = (cellW * 0.8).clamp(30.0, 60.0);
 
         // Get piece asset using common function
         final pieceAsset = pieceAssetFromSymbol(piece);
@@ -574,31 +584,417 @@ List<Widget> _buildPiecesFromFen(
         if (pieceAsset != null) {
           widgets.add(
             Positioned(
+              key: ValueKey('piece-$file-$rank-$piece-${state.pointer}'),
               left: originX + displayFile * cellW + (cellW - pieceSize) / 2,
               top: originY + displayRank * cellH + (cellH - pieceSize) / 2,
-      child: Container(
-        width: pieceSize,
-        height: pieceSize,
-        decoration: isSelected
-            ? BoxDecoration(
-                color: Colors.yellow.withOpacity(0.5),
-                shape: BoxShape.circle,
-              )
-            : null,
-        child: Center(
-          child: SvgPicture.asset(
-                    pieceAsset,
-            width: pieceSize * 0.9,
-            height: pieceSize * 0.9,
+              child: RepaintBoundary(
+                // tránh "ghosting" 1 frame
+                child: Container(
+                  width: pieceSize,
+                  height: pieceSize,
+                  decoration: isSelected
+                      ? BoxDecoration(
+                          color: Colors.yellow.withOpacity(0.5),
+                          shape: BoxShape.circle,
+                        )
+                      : null,
+                  child: Center(
+                    child: SvgPicture.asset(
+                      pieceAsset,
+                      key: ValueKey('svg-$file-$rank-$piece-${state.pointer}'),
+                      width: pieceSize * 0.9,
+                      height: pieceSize * 0.9,
+                    ),
                   ),
-          ),
-        ),
-      ),
-    );
-  }
+                ),
+              ),
+            ),
+          );
+        }
       }
     }
   }
 
   return widgets;
+}
+
+// Setup mode UI
+Widget _buildSetupModeUI(BoardState state, BoardController controller) {
+  return LayoutBuilder(
+    builder: (context, constraints) {
+      final horizontalPad = 12.0; // trùng với padding của ScrollView
+      final usableW = constraints.maxWidth - horizontalPad * 2;
+      final boardH = usableW * 10 / 9;
+
+      return SingleChildScrollView(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Header controls - chỉ có Start Game và Exit Setup
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: Colors.blue[50],
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  ElevatedButton(
+                    onPressed: controller.startGameFromSetup,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.green[100],
+                      foregroundColor: Colors.green[800],
+                    ),
+                    child: const Text('Start Game'),
+                  ),
+                  ElevatedButton(
+                    onPressed: controller.exitSetupMode,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.red[100],
+                      foregroundColor: Colors.red[800],
+                    ),
+                    child: const Text('Exit Setup'),
+                  ),
+                ],
+              ),
+            ),
+
+            const SizedBox(height: 16),
+
+            // Hàng TRÊN: nếu red ở dưới thì trên là đen; nếu black ở dưới thì trên là đỏ
+            SizedBox(
+              height: 100,
+              child: _buildSetupPiecesRow(
+                state,
+                controller,
+                !state.isRedAtBottom, // isRed cho hàng TRÊN
+              ),
+            ),
+
+            const SizedBox(height: 16),
+
+            // Board: luôn đúng theo usableW, canh giữa
+            Align(
+              alignment: Alignment.center,
+              child: _SetupBoard(
+                state: state,
+                controller: controller,
+                size: Size(usableW, boardH),
+                isRedAtBottom: state.isRedAtBottom,
+              ),
+            ),
+
+            const SizedBox(height: 16),
+
+            // Hàng DƯỚI: bên đang ở dưới bàn
+            SizedBox(
+              height: 100,
+              child: _buildSetupPiecesRow(
+                state,
+                controller,
+                state.isRedAtBottom, // isRed cho hàng DƯỚI
+              ),
+            ),
+
+            const SizedBox(height: 16),
+
+            // Controls: Back, Reset, Next
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: Colors.grey[100],
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  ElevatedButton(
+                    onPressed: controller.canUndoSetupMove()
+                        ? controller.undoSetupMove
+                        : null,
+                    child: const Text('Back'),
+                  ),
+                  ElevatedButton(
+                    onPressed: controller.resetSetupBoard,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.orange[100],
+                      foregroundColor: Colors.orange[800],
+                    ),
+                    child: const Text('Reset'),
+                  ),
+                  ElevatedButton(
+                    onPressed: controller.canRedoSetupMove()
+                        ? controller.redoSetupMove
+                        : null,
+                    child: const Text('Next'),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
+    },
+  );
+}
+
+Widget _buildSetupPiecesRow(
+  BoardState state,
+  BoardController controller,
+  bool isRed,
+) {
+  final pieces = isRed
+      ? ['R', 'H', 'E', 'A', 'K', 'C', 'P']
+      : ['r', 'h', 'e', 'a', 'k', 'c', 'p'];
+
+  return SingleChildScrollView(
+    scrollDirection: Axis.horizontal,
+    child: Row(
+      children: pieces.map((piece) {
+        final count = state.setupPieces[piece] ?? 0;
+        final isSelected = state.selectedSetupPiece == piece;
+        final canSelect = count > 0;
+
+        return Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          child: Draggable<String>(
+            data: piece,
+            dragAnchorStrategy: childDragAnchorStrategy,
+            onDragStarted: () {
+              print('Draggable onDragStarted: $piece');
+            },
+            onDragEnd: (details) {
+              print(
+                'Draggable onDragEnd: $piece, wasAccepted: ${details.wasAccepted}',
+              );
+            },
+            feedback: _pieceFeedback(piece),
+            childWhenDragging: Opacity(
+              opacity: 0.35,
+              child: _pieceTile(piece, isSelected, count, canSelect),
+            ),
+            child: GestureDetector(
+              onTap: canSelect
+                  ? () => controller.selectSetupPiece(piece)
+                  : null,
+              child: _pieceTile(piece, isSelected, count, canSelect),
+            ),
+          ),
+        );
+      }).toList(),
+    ),
+  );
+}
+
+Widget _pieceTile(String piece, bool isSelected, int count, bool canSelect) {
+  return Container(
+    width: 50,
+    height: 50,
+    decoration: BoxDecoration(
+      color: isSelected ? Colors.yellow.withOpacity(0.5) : Colors.grey[200],
+      border: Border.all(
+        color: isSelected ? Colors.orange : Colors.grey,
+        width: isSelected ? 2 : 1,
+      ),
+      borderRadius: BorderRadius.circular(8),
+    ),
+    child: Stack(
+      children: [
+        Center(
+          child: SvgPicture.asset(
+            pieceAssetFromSymbol(piece)!,
+            width: 35,
+            height: 35,
+          ),
+        ),
+        if (count > 0)
+          Positioned(
+            top: 2,
+            right: 2,
+            child: Container(
+              padding: const EdgeInsets.all(2),
+              decoration: BoxDecoration(
+                color: Colors.red,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(
+                '$count',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 10,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+          ),
+      ],
+    ),
+  );
+}
+
+Widget _pieceFeedback(String piece) {
+  return Material(
+    type: MaterialType.transparency,
+    child: SizedBox(
+      width: 46,
+      height: 46,
+      child: Center(
+        child: SvgPicture.asset(
+          pieceAssetFromSymbol(piece)!,
+          width: 42,
+          height: 42,
+        ),
+      ),
+    ),
+  );
+}
+
+class _SetupBoard extends StatelessWidget {
+  final BoardState state;
+  final BoardController controller;
+  final Size size;
+  final bool isRedAtBottom;
+
+  _SetupBoard({
+    required this.state,
+    required this.controller,
+    required this.size,
+    required this.isRedAtBottom,
+  });
+
+  final GlobalKey _boardKey = GlobalKey();
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: size.width,
+      height: size.height,
+      child: Stack(
+        key: _boardKey,
+        children: [
+          // nền SVG phủ kín
+          Positioned.fill(
+            child: SvgPicture.asset(
+              'assets/boards/xiangqi_gmchess_wood.svg',
+              fit: BoxFit.fill,
+            ),
+          ),
+          // overlay (quân + drag target + tap)
+          _buildSetupBoardOverlay(
+            state,
+            controller,
+            size,
+            _boardKey,
+            isRedAtBottom,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+Widget _buildSetupBoardOverlay(
+  BoardState state,
+  BoardController controller,
+  Size boardSize,
+  GlobalKey boardKey,
+  bool isRedAtBottom,
+) {
+  final board = FenParser.parseBoard(state.fen);
+  final cellW = boardSize.width / 9;
+  final cellH = boardSize.height / 10;
+  final pieceSize = (cellW < cellH ? cellW : cellH) * 0.8;
+
+  return Stack(
+    children: [
+      // DragTarget: đặt ở trên cùng để nhận kéo thả
+      Positioned.fill(
+        child: IgnorePointer(
+          ignoring: false,
+          child: DragTarget<String>(
+            hitTestBehavior: HitTestBehavior.opaque,
+            builder: (_, __, ___) => Container(
+              color: Colors.transparent,
+              child: const SizedBox.expand(),
+            ),
+            onWillAcceptWithDetails: (DragTargetDetails<String> details) {
+              print('DragTarget onWillAcceptWithDetails: ${details.data}');
+              return true; // Always accept for debugging
+            },
+            onAcceptWithDetails: (DragTargetDetails<String> details) {
+              print(
+                'DragTarget onAcceptWithDetails: ${details.data} at ${details.offset}',
+              );
+              final box =
+                  boardKey.currentContext!.findRenderObject() as RenderBox;
+              final local = box.globalToLocal(details.offset);
+              print('Converted to local: $local');
+              final dx = local.dx.clamp(0.0, boardSize.width - 0.01);
+              final dy = local.dy.clamp(0.0, boardSize.height - 0.01);
+
+              // toạ độ HIỂN THỊ
+              final displayFile = (dx / cellW).floor().clamp(0, 8);
+              final displayRank = (dy / cellH).floor().clamp(0, 9);
+
+              // đổi sang toạ độ BÀN theo hướng
+              final file = displayFile;
+              final rank = isRedAtBottom ? displayRank : 9 - displayRank;
+              print('Calculated file=$file, rank=$rank');
+
+              controller.selectSetupPiece(details.data);
+              controller.placePieceOnBoard(file, rank);
+            },
+          ),
+        ),
+      ),
+
+      // vẽ quân đang có: cũng phải lật theo hướng
+      for (int r = 0; r < 10; r++)
+        for (int f = 0; f < 9; f++)
+          if (board[r][f].isNotEmpty)
+            Positioned(
+              left: f * cellW + (cellW - pieceSize) / 2,
+              top:
+                  (isRedAtBottom ? r : 9 - r) * cellH + (cellH - pieceSize) / 2,
+              child: GestureDetector(
+                onTap: () => controller.removePieceFromBoard(f, r),
+                child: SizedBox(
+                  width: pieceSize,
+                  height: pieceSize,
+                  child: Center(
+                    child: SvgPicture.asset(
+                      pieceAssetFromSymbol(board[r][f])!,
+                      width: pieceSize * 0.9,
+                      height: pieceSize * 0.9,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+
+      // Tap để đặt: cũng cần quy đổi display → board
+      Positioned.fill(
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTapDown: (d) {
+            final dx = d.localPosition.dx.clamp(0.0, boardSize.width - 0.01);
+            final dy = d.localPosition.dy.clamp(0.0, boardSize.height - 0.01);
+
+            final displayFile = (dx / cellW).floor().clamp(0, 8);
+            final displayRank = (dy / cellH).floor().clamp(0, 9);
+
+            final file = displayFile;
+            final rank = isRedAtBottom ? displayRank : 9 - displayRank;
+
+            if (state.selectedSetupPiece != null) {
+              controller.placePieceOnBoard(file, rank);
+            }
+          },
+        ),
+      ),
+    ],
+  );
 }
