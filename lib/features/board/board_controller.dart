@@ -267,7 +267,7 @@ class BoardController extends StateNotifier<BoardState> {
             selectedFile: file,
             selectedRank: rank,
             possibleMoves: possibleMoves,
-            arrows: const <ArrowData>[], // Ẩn mũi tên khi bắt đầu chọn quân
+            // Không ẩn mũi tên khi chọn quân
           );
         }
       }
@@ -285,7 +285,7 @@ class BoardController extends StateNotifier<BoardState> {
           selectedFile: file,
           selectedRank: rank,
           possibleMoves: possibleMoves,
-          arrows: const <ArrowData>[], // Ẩn mũi tên khi bắt đầu chọn quân
+          // Không ẩn mũi tên khi chọn quân
         );
         return;
       }
@@ -302,7 +302,7 @@ class BoardController extends StateNotifier<BoardState> {
               selectedFile: file,
               selectedRank: rank,
               possibleMoves: possibleMoves,
-              arrows: const <ArrowData>[], // Ẩn mũi tên khi bắt đầu chọn quân
+              // Không ẩn mũi tên khi chọn quân
             );
           }
         }
@@ -409,7 +409,7 @@ class BoardController extends StateNotifier<BoardState> {
         });
         // Additional watchdog: force clear if animation is stuck for too long
         _animationWatchdog?.cancel();
-        _animationWatchdog = Timer(const Duration(milliseconds: 800), () {
+        _animationWatchdog = Timer(const Duration(milliseconds: 2000), () {
           if (state.pendingAnimation != null) {
             AppLogger().log(
               'Animation watchdog: force clearing stuck animation',
@@ -890,18 +890,6 @@ class BoardController extends StateNotifier<BoardState> {
     return '$fromFileUci$fromRankUci$toFileUci$toRankUci';
   }
 
-  void _handleBestMove(String bestMove) {
-    if (bestMove.isEmpty) return;
-
-    // Apply engine move
-    applyMove(bestMove);
-
-    // If in vs engine mode, continue the game
-    if (state.isVsEngineMode) {
-      _scheduleNextEngineMove();
-    }
-  }
-
   void _scheduleNextEngineMove() {
     if (!state.isVsEngineMode || state.gameWinner != null) return;
 
@@ -932,28 +920,6 @@ class BoardController extends StateNotifier<BoardState> {
 
     try {
       state = state.copyWith(isEngineThinking: true);
-      final bestMove = await _engine!.getBestMove(
-        state.fen,
-        state.analysisDepth,
-      );
-      state = state.copyWith(isEngineThinking: false);
-      _handleBestMove(bestMove);
-    } catch (e) {
-      AppLogger().error('Failed to request engine move', e);
-      state = state.copyWith(
-        isEngineThinking: false,
-        engineError: 'Engine move failed: $e',
-      );
-    }
-  }
-
-  Future<void> _makeEngineMove() async {
-    if (_engine == null || !state.isVsEngineMode) return;
-
-    try {
-      AppLogger().log(
-        'Engine making move with difficulty: ${state.vsEngineDifficulty}',
-      );
 
       // Check if we already have best lines from previous analysis
       if (state.bestLines.isNotEmpty) {
@@ -968,13 +934,169 @@ class BoardController extends StateNotifier<BoardState> {
 
       // If no best lines available, start new analysis
       AppLogger().log('Starting new engine analysis for move selection');
+
+      // Use getTopMoves to get multiple best moves for difficulty selection
+      await _engine!.getTopMoves(state.fen, state.analysisDepth, state.multiPv);
+
+      // The best lines will be updated by analyzeTopMoves callback
+      // Check if we now have best lines
+      if (state.bestLines.isNotEmpty) {
+        String selectedMove = _selectEngineMove(state.bestLines);
+        if (selectedMove.isNotEmpty && selectedMove != 'null') {
+          AppLogger().log(
+            'Engine selected move from best lines: $selectedMove',
+          );
+          await _applyEngineMove(selectedMove);
+          return;
+        }
+      }
+
+      // Fallback to simple best move if top moves failed
       final bestMove = await _engine!.getBestMove(
         state.fen,
         state.analysisDepth,
       );
-
+      state = state.copyWith(isEngineThinking: false);
       if (bestMove.isNotEmpty && bestMove != 'null') {
-        AppLogger().log('Engine selected move: $bestMove');
+        await _applyEngineMove(bestMove);
+        // Ensure animation is committed
+        await Future.delayed(const Duration(milliseconds: 150));
+        if (state.pendingAnimation != null) {
+          await commitEngineAnimatedMove();
+        }
+      }
+    } catch (e) {
+      AppLogger().error('Failed to request engine move', e);
+      state = state.copyWith(
+        isEngineThinking: false,
+        engineError: 'Engine move failed: $e',
+      );
+    }
+  }
+
+  // Select engine move based on difficulty
+  String _selectEngineMove(List<BestLine> bestLines) {
+    if (bestLines.isEmpty) return '';
+
+    final difficulty = state.vsEngineDifficulty ?? 'hard';
+    AppLogger().log('Selecting move for difficulty: $difficulty');
+
+    switch (difficulty) {
+      case 'easy':
+        return _selectEasyMove(bestLines);
+      case 'medium':
+        return _selectMediumMove(bestLines);
+      case 'hard':
+      default:
+        return _selectHardMove(bestLines);
+    }
+  }
+
+  // Easy: Random valid move, but every 2 moves use lower scoring best move
+  String _selectEasyMove(List<BestLine> bestLines) {
+    // Every 2 moves, use the lower scoring best move
+    final moveCount = state.moves.length;
+    if (moveCount % 2 == 0 && bestLines.length >= 2) {
+      // Use the move with lower score (worse move)
+      final move1 = bestLines[0];
+      final move2 = bestLines[1];
+      final selectedMove = move1.scoreCp < move2.scoreCp
+          ? move1.firstMove
+          : move2.firstMove;
+      AppLogger().log(
+        'Easy mode: Using lower scoring move (${move1.scoreCp} vs ${move2.scoreCp})',
+      );
+      return selectedMove;
+    } else {
+      // For random moves, use a random best move (simplified approach)
+      if (bestLines.length >= 2) {
+        final randomIndex = DateTime.now().millisecondsSinceEpoch % 2;
+        final randomMove = bestLines[randomIndex].firstMove;
+        AppLogger().log('Easy mode: Using random best move');
+        return randomMove;
+      } else {
+        // Fallback to best move
+        AppLogger().log('Easy mode: Using best move (fallback)');
+        return bestLines.first.firstMove;
+      }
+    }
+  }
+
+  // Medium: Use lower scoring best move
+  String _selectMediumMove(List<BestLine> bestLines) {
+    if (bestLines.length >= 2) {
+      // Use the move with lower score (worse move)
+      final move1 = bestLines[0];
+      final move2 = bestLines[1];
+      final selectedMove = move1.scoreCp < move2.scoreCp
+          ? move1.firstMove
+          : move2.firstMove;
+      AppLogger().log(
+        'Medium mode: Using lower scoring move (${move1.scoreCp} vs ${move2.scoreCp})',
+      );
+      return selectedMove;
+    } else {
+      // Fallback to first move
+      return bestLines.first.firstMove;
+    }
+  }
+
+  // Hard: Use highest scoring best move
+  String _selectHardMove(List<BestLine> bestLines) {
+    // Use the best move (highest score)
+    final selectedMove = bestLines.first.firstMove;
+    AppLogger().log(
+      'Hard mode: Using best move (score: ${bestLines.first.scoreCp})',
+    );
+    return selectedMove;
+  }
+
+  Future<void> _makeEngineMove() async {
+    if (_engine == null || !state.isVsEngineMode) return;
+
+    try {
+      AppLogger().log(
+        'Engine making move with difficulty: ${state.vsEngineDifficulty}',
+      );
+
+      // Set MultiPV to 2 for engine move selection (internal, no panel change)
+      await _engine!.setMultiPV(2);
+
+      // Analyze current position consistently with startpos + currentMoves
+      await analyzeTopMoves(
+        engine: _engine!,
+        fen: _isFromStartpos() ? 'startpos' : state.setupFen!,
+        depth: state.analysisDepth,
+        numMoves: 2,
+        moves: currentMoves(),
+      );
+
+      // Wait 1 second after analysis completes before moving
+      await Future.delayed(const Duration(seconds: 1));
+
+      if (state.bestLines.length >= 2) {
+        // Pick the lower-scoring move among top-2
+        final l1 = state.bestLines[0];
+        final l2 = state.bestLines[1];
+        final selectedMove = l1.scoreCp < l2.scoreCp
+            ? l1.firstMove
+            : l2.firstMove;
+        AppLogger().log(
+          'Engine selected lower scoring move: $selectedMove (${l1.scoreCp} vs ${l2.scoreCp})',
+        );
+
+        await _applyEngineMove(selectedMove);
+        return;
+      }
+
+      // Fallback: get best move (already parsed to UCI in engine)
+      final bestMove = await _engine!.getBestMove(
+        _isFromStartpos() ? 'startpos' : state.setupFen!,
+        state.analysisDepth,
+      );
+      if (bestMove.isNotEmpty && bestMove != 'null') {
+        AppLogger().log('Engine selected fallback move: $bestMove');
+        await Future.delayed(const Duration(seconds: 1));
         await _applyEngineMove(bestMove);
       }
     } catch (e) {
@@ -984,6 +1106,9 @@ class BoardController extends StateNotifier<BoardState> {
         backgroundColor: Colors.red,
         duration: const Duration(seconds: 3),
       );
+    } finally {
+      // Reset MultiPV back to 1 after engine move
+      await _engine!.setMultiPV(1);
     }
   }
 
@@ -999,9 +1124,13 @@ class BoardController extends StateNotifier<BoardState> {
 
     // Parse move to get from/to coordinates
     final fromFile = moveUci.codeUnitAt(0) - 'a'.codeUnitAt(0);
-    final fromRank = int.parse(moveUci[1]) - 1;
     final toFile = moveUci.codeUnitAt(2) - 'a'.codeUnitAt(0);
-    final toRank = int.parse(moveUci[3]) - 1;
+
+    // ✅ UCI rank 0..9 ⇒ rank trên bảng = 9 - uciRank
+    final fromRankUci = int.parse(moveUci[1]);
+    final toRankUci = int.parse(moveUci[3]);
+    final fromRank = 9 - fromRankUci;
+    final toRank = 9 - toRankUci;
 
     // Get piece from current board
     final board = FenParser.parseBoard(state.fen);
@@ -1044,84 +1173,82 @@ class BoardController extends StateNotifier<BoardState> {
   }
 
   // Commit engine animated move
+  // Flag to prevent re-entrancy in commitEngineAnimatedMove
+  bool _committingEngineAnim = false;
+
   Future<void> commitEngineAnimatedMove() async {
+    if (_committingEngineAnim) return; // ✅ chống re-entrancy
     final anim = state.pendingAnimation;
     if (anim == null) return;
 
-    AppLogger().log('Committing engine animated move: ${anim.moveUci}');
+    _committingEngineAnim = true;
+    // ✅ dọn timer để auto-commit không bắn thêm lần nữa
+    _animationAutoCommit?.cancel();
+    _animationWatchdog?.cancel();
 
-    final newMoves = [...state.moves];
-    if (state.pointer < newMoves.length) {
-      newMoves.removeRange(state.pointer, newMoves.length);
-    }
-    newMoves.add(anim.moveUci);
-
-    // Update FEN after the move
-    final newFen = FenParser.applyMove(state.fen, anim.moveUci);
-
-    state = state.copyWith(
-      fen: newFen,
-      moves: newMoves,
-      pointer: newMoves.length,
-      redToMove: !state.redToMove, // Switch sides
-      bestLines: [],
-      canBack: newMoves.isNotEmpty,
-      canNext: false,
-      selectedFile: null,
-      selectedRank: null,
-      possibleMoves: [],
-      isEngineThinking: false,
-      isEngineTurn: false, // Switch back to human turn
-      pendingAnimation: null,
-    );
-
-    // Update engine position without waiting for readyok
     try {
-      if (_isFromStartpos()) {
-        await _engine!.setPosition('startpos', currentMoves());
-      } else {
-        await _engine!.setPosition(state.setupFen!, currentMoves());
+      // ✅ Nếu nước cuối cùng đã là anim.moveUci thì thôi
+      if (state.pointer > 0 && state.moves[state.pointer - 1] == anim.moveUci) {
+        state = state.copyWith(pendingAnimation: null);
+        return;
       }
-    } catch (e) {
-      AppLogger().log('Engine position update failed (non-critical): $e');
-      // Don't show error notification for this as it's not critical
-    }
 
-    // Check game status
-    try {
-      await _checkGameStatus();
-    } catch (e) {
-      AppLogger().error('Game status check failed after engine move', e);
-    }
+      AppLogger().log('Committing engine animated move: ${anim.moveUci}');
 
-    // Start analysis for human's turn
-    final winner = GameStatusService.getWinner(state.fen);
-    final isCheckmate = GameStatusService.isCheckmate(state.fen);
+      final newMoves = [...state.moves];
+      if (state.pointer < newMoves.length) {
+        newMoves.removeRange(state.pointer, newMoves.length);
+      }
+      // Add engine move to history to keep startpos + moves consistent
+      newMoves.add(anim.moveUci);
 
-    if (!isCheckmate && (winner == null || winner == 'Draw')) {
-      await _analyzePosition();
-    }
-  }
+      // Update FEN after the move
+      final newFen = FenParser.applyMove(state.fen, anim.moveUci);
 
-  String _selectEngineMove(List<BestLine> bestLines) {
-    if (bestLines.isEmpty) return '';
+      state = state.copyWith(
+        fen: newFen,
+        moves: newMoves,
+        pointer: newMoves.length,
+        redToMove: !state.redToMove, // Switch sides
+        bestLines: [],
+        canBack: newMoves.isNotEmpty,
+        canNext: false,
+        selectedFile: null,
+        selectedRank: null,
+        possibleMoves: [],
+        isEngineThinking: false,
+        isEngineTurn: false, // Switch back to human turn
+        pendingAnimation: null, // ✅ luôn clear ở đây
+      );
 
-    // Simple difficulty selection based on best lines
-    switch (state.vsEngineDifficulty) {
-      case 'easy':
-        // Use worst move (last in list)
-        return bestLines.last.firstMove;
-      case 'medium':
-        // Use random move from top 3
-        if (bestLines.length >= 3) {
-          final random = DateTime.now().millisecondsSinceEpoch % 3;
-          return bestLines[random].firstMove;
+      // Update engine position without waiting for readyok
+      try {
+        if (_isFromStartpos()) {
+          await _engine!.setPosition('startpos', currentMoves());
+        } else {
+          await _engine!.setPosition(state.setupFen!, currentMoves());
         }
-        return bestLines.last.firstMove;
-      case 'hard':
-      default:
-        // Use best move (first in list)
-        return bestLines.first.firstMove;
+      } catch (e) {
+        AppLogger().log('Engine position update failed (non-critical): $e');
+        // Don't show error notification for this as it's not critical
+      }
+
+      // Check game status
+      try {
+        await _checkGameStatus();
+      } catch (e) {
+        AppLogger().error('Game status check failed after engine move', e);
+      }
+
+      // Start analysis for human's turn
+      final winner = GameStatusService.getWinner(state.fen);
+      final isCheckmate = GameStatusService.isCheckmate(state.fen);
+
+      if (!isCheckmate && (winner == null || winner == 'Draw')) {
+        await _analyzePosition();
+      }
+    } finally {
+      _committingEngineAnim = false;
     }
   }
 
@@ -1138,6 +1265,17 @@ class BoardController extends StateNotifier<BoardState> {
     if (_engine == null) return;
 
     await AppLogger().log('Apply move: $moveUci');
+
+    // Dừng phân tích engine đang chạy khi người dùng đánh ngay
+    if (state.isEngineThinking) {
+      AppLogger().log('Stopping ongoing engine analysis - user made move');
+      try {
+        await _engine!.stop(); // Dừng phân tích hiện tại
+      } catch (e) {
+        AppLogger().log('Error stopping engine analysis: $e');
+      }
+      state = state.copyWith(isEngineThinking: false);
+    }
 
     // Hard de-dup: if the last committed move equals the incoming move, ignore
     if (state.pointer > 0 && state.moves[state.pointer - 1] == moveUci) {
@@ -1510,16 +1648,16 @@ class BoardController extends StateNotifier<BoardState> {
         // Stop any ongoing search first
         await _engine!.stop();
 
-        // Start new game
-        await _engine!.newGame();
+        // Start new game (không đợi isready)
+        await _engine!.newGameFast();
 
-        // Reset engine settings to default values
-        await _engine!.setMultiPV(1);
+        // Reset engine settings to default values (không đợi isready)
+        await _engine!.setMultiPVFast(1);
 
-        // Đặt lại vị trí rõ ràng về startpos không moves
-        await _engine!.setPosition('startpos', const []);
+        // Đặt lại vị trí rõ ràng về startpos không moves (không đợi isready)
+        await _engine!.setPositionFast('startpos', const []);
 
-        // Bắt đầu phân tích
+        // Bắt đầu phân tích ngay lập tức
         await _analyzePosition();
 
         AppLogger().log('Game reset - engine settings restored to default');
@@ -1586,13 +1724,20 @@ class BoardController extends StateNotifier<BoardState> {
       return;
     }
 
+    AppLogger().log('Starting vs engine mode with difficulty: $difficulty');
+
+    // Set MultiPV to 2 to get 2 best moves for difficulty selection
+    await _engine!.setMultiPV(2);
+
     state = state.copyWith(
       isVsEngineMode: true,
+      isEngineTurn: false, // Human starts first
       vsEngineDifficulty: difficulty,
       gameWinner: null,
     );
 
-    AppLogger().log('Started vs engine mode with difficulty: $difficulty');
+    // Start analysis for the current position
+    await _analyzePosition();
 
     // If it's engine's turn, request move
     if (!state.redToMove) {
@@ -1707,18 +1852,20 @@ class BoardController extends StateNotifier<BoardState> {
     AppLogger().log('Exited setup mode');
   }
 
-  void commitAnimatedMove() {
+  void commitAnimatedMove() async {
     final anim = state.pendingAnimation;
     if (anim == null) return;
 
+    // ✅ Nếu là nước của engine, chuyển qua commitEngineAnimatedMove
+    if (anim.isEngineMove) {
+      await commitEngineAnimatedMove();
+      return;
+    }
+
+    // Người chơi
     print('Committing animated move: ${anim.moveUci}');
     applyMove(anim.moveUci);
-
-    state = state.copyWith(
-      pendingAnimation: null,
-      clearPendingAnimation: true,
-      // Selection already cleared when move was confirmed
-    );
+    state = state.copyWith(pendingAnimation: null, clearPendingAnimation: true);
   }
 
   List<BestLine> _parseMultiPv(String s) {
@@ -1801,7 +1948,9 @@ class BoardController extends StateNotifier<BoardState> {
       }
 
       final lines = latestLines.values.toList()
-        ..sort((a, b) => b.scoreCp.compareTo(a.scoreCp)); // Sắp xếp theo điểm số từ cao xuống thấp
+        ..sort(
+          (a, b) => b.scoreCp.compareTo(a.scoreCp),
+        ); // Sắp xếp theo điểm số từ cao xuống thấp
 
       final arrows = <ArrowData>[];
       for (final line in lines) {

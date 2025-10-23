@@ -405,7 +405,7 @@ class PikafishEngine {
     _sendCommand('go depth $depth');
 
     // Wait for bestmove with longer timeout
-    final line = await _waitForResponse('bestmove', 15000);
+    final line = await _waitForResponse('bestmove', 30000);
     debugPrint('$_tag: Found bestmove: $line');
 
     // Parse: "bestmove e2e4 ponder ..." -> "e2e4"
@@ -538,6 +538,44 @@ class PikafishEngine {
     _sendCommand('isready');
     await _waitForResponse('readyok', 3000);
     debugPrint('$_tag: New game started');
+  }
+
+  /// Start a new game (fast version - no isready wait)
+  Future<void> newGameFast() async {
+    if (!_isInitialized) {
+      throw Exception('Engine not initialized');
+    }
+
+    _sendCommand('ucinewgame');
+    debugPrint('$_tag: New game started (fast)');
+  }
+
+  /// Set MultiPV value (fast version - no isready wait)
+  Future<void> setMultiPVFast(int value) async {
+    if (!_isInitialized) {
+      throw Exception('Engine not initialized');
+    }
+
+    _sendCommand('setoption name MultiPV value $value');
+    debugPrint('$_tag: MultiPV set to $value (fast)');
+  }
+
+  /// Set position (fast version - no isready wait)
+  Future<void> setPositionFast(String fen, List<String> moves) async {
+    if (!_isInitialized) {
+      throw Exception('Engine not initialized');
+    }
+
+    final positionCmd = (fen == 'startpos')
+        ? (moves.isNotEmpty
+              ? 'position startpos moves ${moves.join(' ')}'
+              : 'position startpos')
+        : (moves.isNotEmpty
+              ? 'position fen $fen moves ${moves.join(' ')}'
+              : 'position fen $fen');
+
+    _sendCommand(positionCmd);
+    debugPrint('$_tag: Position set (fast)');
   }
 
   /// Check if engine is initialized

@@ -325,4 +325,51 @@ class XiangqiRules {
       return false;
     }
   }
+
+  /// Get all legal moves for the current position
+  static List<String> getAllLegalMoves(String fen) {
+    final moves = <String>[];
+    final board = FenParser.parseBoard(fen);
+
+    for (int fromRank = 0; fromRank < 10; fromRank++) {
+      for (int fromFile = 0; fromFile < 9; fromFile++) {
+        final piece = board[fromRank][fromFile];
+        if (piece.isEmpty) continue;
+
+        // Check if it's the current player's piece
+        final sideToMove = FenParser.getSideToMove(fen);
+        final isRedPiece = piece == piece.toUpperCase();
+        if ((sideToMove == 'w' && !isRedPiece) ||
+            (sideToMove == 'b' && isRedPiece)) {
+          continue; // Skip opponent's pieces
+        }
+
+        // Check all possible destinations
+        for (int toRank = 0; toRank < 10; toRank++) {
+          for (int toFile = 0; toFile < 9; toFile++) {
+            if (fromFile == toFile && fromRank == toRank) continue;
+
+            final uci = _fileRankToUci(fromFile, fromRank, toFile, toRank);
+            if (isValidMove(fen, uci)) {
+              moves.add(uci);
+            }
+          }
+        }
+      }
+    }
+
+    return moves;
+  }
+
+  /// Convert file/rank coordinates to UCI notation
+  static String _fileRankToUci(
+    int fromFile,
+    int fromRank,
+    int toFile,
+    int toRank,
+  ) {
+    final fromSquare = '${String.fromCharCode(97 + fromFile)}${9 - fromRank}';
+    final toSquare = '${String.fromCharCode(97 + toFile)}${9 - toRank}';
+    return '$fromSquare$toSquare';
+  }
 }

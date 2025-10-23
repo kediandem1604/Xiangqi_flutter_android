@@ -5,6 +5,41 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'board_controller.dart';
 import '../../core/fen.dart';
 
+// Hàm chung để tránh lệch map giữa quân tĩnh và animation
+String? pieceAssetFromSymbol(String s) {
+  switch (s) {
+    case 'r':
+      return 'assets/pieces/xiangqi/black_rook.svg';
+    case 'h':
+      return 'assets/pieces/xiangqi/black_knight.svg';
+    case 'e':
+      return 'assets/pieces/xiangqi/black_bishop.svg';
+    case 'a':
+      return 'assets/pieces/xiangqi/black_advisor.svg';
+    case 'k':
+      return 'assets/pieces/xiangqi/black_king.svg';
+    case 'c':
+      return 'assets/pieces/xiangqi/black_cannon.svg';
+    case 'p':
+      return 'assets/pieces/xiangqi/black_pawn.svg';
+    case 'R':
+      return 'assets/pieces/xiangqi/red_rook.svg';
+    case 'H':
+      return 'assets/pieces/xiangqi/red_knight.svg';
+    case 'E':
+      return 'assets/pieces/xiangqi/red_bishop.svg';
+    case 'A':
+      return 'assets/pieces/xiangqi/red_advisor.svg';
+    case 'K':
+      return 'assets/pieces/xiangqi/red_king.svg';
+    case 'C':
+      return 'assets/pieces/xiangqi/red_cannon.svg';
+    case 'P':
+      return 'assets/pieces/xiangqi/red_pawn.svg';
+  }
+  return null;
+}
+
 class BoardView extends ConsumerStatefulWidget {
   final List<ArrowData> arrows; // list of arrow from->to in board coordinates
   final bool showStartPosition;
@@ -137,16 +172,16 @@ class _BoardViewState extends ConsumerState<BoardView>
                     FadeTransition(
                       opacity: _fade,
                       child: CustomPaint(
-                        painter: _ArrowPainter(
+                      painter: _ArrowPainter(
                           arrows: widget.arrows,
-                          cellWidth: cellW,
-                          cellHeight: cellH,
+                        cellWidth: cellW,
+                        cellHeight: cellH,
                           originX: originX,
                           originY: originY,
                           isRedAtBottom: state.isRedAtBottom,
-                        ),
-                        child: Container(),
                       ),
+                      child: Container(),
+                    ),
                     ),
                   // QUÂN CỜ: chỉ hiển thị khi _piecesReady
                   if (_piecesReady && widget.showStartPosition)
@@ -170,15 +205,15 @@ class _BoardViewState extends ConsumerState<BoardView>
 
                   // ANIMATION DI CHUYỂN QUÂN: cũng nên chờ _piecesReady
                   if (_piecesReady)
-                    _buildMoveAnimation(
-                      state,
+                  _buildMoveAnimation(
+                    state,
                       Size(constraints.maxWidth, constraints.maxHeight),
                       ref,
                       cellW,
                       cellH,
                       originX,
                       originY,
-                    ),
+                  ),
                   // Gesture detector for piece interaction
                   GestureDetector(
                     onTapDown: (details) => _onBoardTap(
@@ -309,27 +344,9 @@ class _BoardViewState extends ConsumerState<BoardView>
     );
   }
 
-  // Get piece asset path
+  // Get piece asset path - dùng chung cho cả quân tĩnh và animation
   String? _getPieceAsset(String piece) {
-    final pieceMap = {
-      'r': 'black_rook',
-      'n': 'black_knight',
-      'b': 'black_bishop',
-      'a': 'black_advisor',
-      'k': 'black_king',
-      'c': 'black_cannon',
-      'p': 'black_pawn',
-      'R': 'red_rook',
-      'N': 'red_knight',
-      'B': 'red_bishop',
-      'A': 'red_advisor',
-      'K': 'red_king',
-      'C': 'red_cannon',
-      'P': 'red_pawn',
-    };
-
-    final assetName = pieceMap[piece];
-    return assetName != null ? 'assets/pieces/xiangqi/$assetName.svg' : null;
+    return pieceAssetFromSymbol(piece);
   }
 }
 
@@ -441,10 +458,10 @@ class _ArrowPainter extends CustomPainter {
     // Draw arrows with colors based on score
     for (int i = 0; i < arrows.length; i++) {
       final arrowData = arrows[i];
-      final paint = Paint()
+    final paint = Paint()
         ..color = _getArrowColor(arrowData.scoreCp)
         ..strokeWidth = _getArrowWidth(arrowData.scoreCp)
-        ..style = PaintingStyle.stroke;
+      ..style = PaintingStyle.stroke;
 
       // Tính opacity dựa trên thứ tự nước đi (arrowIndex)
       final opacity = _getArrowOpacity(arrowData.scoreCp, i);
@@ -534,7 +551,7 @@ List<Widget> _buildPiecesFromFen(
       final piece = board[rank][file];
       if (piece.isNotEmpty) {
         // During animation, hide the piece at source and any captured piece at destination
-        if (state.pendingAnimation != null) {
+    if (state.pendingAnimation != null) {
           if ((file == state.pendingAnimation!.fromFile &&
                   rank == state.pendingAnimation!.fromRank) ||
               (file == state.pendingAnimation!.toFile &&
@@ -549,55 +566,36 @@ List<Widget> _buildPiecesFromFen(
 
         final isSelected =
             state.selectedFile == file && state.selectedRank == rank;
-        final pieceSize = (cellW * 0.8).clamp(30.0, 60.0);
+    final pieceSize = (cellW * 0.8).clamp(30.0, 60.0);
 
-        // Get piece asset inline
-        final pieceMap = {
-          'r': 'black_rook',
-          'h': 'black_knight',
-          'e': 'black_bishop',
-          'a': 'black_advisor',
-          'k': 'black_king',
-          'c': 'black_cannon',
-          'p': 'black_pawn',
-          'R': 'red_rook',
-          'H': 'red_knight',
-          'E': 'red_bishop',
-          'A': 'red_advisor',
-          'K': 'red_king',
-          'C': 'red_cannon',
-          'P': 'red_pawn',
-        };
-        final assetName = pieceMap[piece];
-        final pieceAsset = assetName != null
-            ? 'assets/pieces/xiangqi/$assetName.svg'
-            : null;
+        // Get piece asset using common function
+        final pieceAsset = pieceAssetFromSymbol(piece);
 
         if (pieceAsset != null) {
           widgets.add(
             Positioned(
               left: originX + displayFile * cellW + (cellW - pieceSize) / 2,
               top: originY + displayRank * cellH + (cellH - pieceSize) / 2,
-              child: Container(
-                width: pieceSize,
-                height: pieceSize,
-                decoration: isSelected
-                    ? BoxDecoration(
-                        color: Colors.yellow.withOpacity(0.5),
-                        shape: BoxShape.circle,
-                      )
-                    : null,
-                child: Center(
-                  child: SvgPicture.asset(
+      child: Container(
+        width: pieceSize,
+        height: pieceSize,
+        decoration: isSelected
+            ? BoxDecoration(
+                color: Colors.yellow.withOpacity(0.5),
+                shape: BoxShape.circle,
+              )
+            : null,
+        child: Center(
+          child: SvgPicture.asset(
                     pieceAsset,
-                    width: pieceSize * 0.9,
-                    height: pieceSize * 0.9,
+            width: pieceSize * 0.9,
+            height: pieceSize * 0.9,
                   ),
-                ),
-              ),
-            ),
-          );
-        }
+          ),
+        ),
+      ),
+    );
+  }
       }
     }
   }

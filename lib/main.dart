@@ -52,6 +52,7 @@ class _XiangqiHomePageState extends ConsumerState<XiangqiHomePage> {
   String _output = 'Engine output will appear here...';
   bool _isLoading = false;
   String _currentGameMode = 'normal'; // Track current game mode
+  bool _showBestMoves = true; // Show/hide best moves and arrows
 
   @override
   void initState() {
@@ -169,6 +170,20 @@ class _XiangqiHomePageState extends ConsumerState<XiangqiHomePage> {
       appBar: AppBar(
         title: const Text('Xiangqi Engine'),
         backgroundColor: Colors.orange[200],
+        actions: [
+          // Toggle best moves visibility
+          IconButton(
+            icon: Icon(
+              _showBestMoves ? Icons.visibility : Icons.visibility_off,
+            ),
+            onPressed: () {
+              setState(() {
+                _showBestMoves = !_showBestMoves;
+              });
+            },
+            tooltip: _showBestMoves ? 'Ẩn Best Moves' : 'Hiện Best Moves',
+          ),
+        ],
       ),
       drawer: Drawer(
         child: SafeArea(
@@ -213,6 +228,7 @@ class _XiangqiHomePageState extends ConsumerState<XiangqiHomePage> {
                             boardControllerProvider.notifier,
                           );
                           boardController.stopVsEngineMode();
+                          _showSnackBar('Chuyển sang chế độ chơi bình thường');
                         },
                       ),
                       _buildMenuItem(
@@ -357,7 +373,9 @@ class _XiangqiHomePageState extends ConsumerState<XiangqiHomePage> {
                     return Center(
                       child: SizedBox(
                         width: MediaQuery.of(context).size.width * 0.9,
-                        child: BoardView(arrows: st.arrows),
+                        child: BoardView(
+                          arrows: _showBestMoves ? st.arrows : const [],
+                        ),
                       ),
                     );
                   },
@@ -425,7 +443,7 @@ class _XiangqiHomePageState extends ConsumerState<XiangqiHomePage> {
               const SizedBox(height: 16),
 
               // Best moves panel
-              if (_engineInitialized) ...[
+              if (_engineInitialized && _showBestMoves) ...[
                 Consumer(
                   builder: (context, ref, _) {
                     return SizedBox(height: 220, child: BestMovesPanel());
@@ -450,13 +468,18 @@ class _XiangqiHomePageState extends ConsumerState<XiangqiHomePage> {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text('Chọn cấp độ khó'),
+        title: const Text('Chọn cấp độ khó'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            const Text('Chọn cấp độ khó cho máy:'),
+            const SizedBox(height: 16),
             ListTile(
-              title: Text('Dễ'),
-              subtitle: Text('Engine suy nghĩ 0.5 giây'),
+              leading: const Icon(Icons.star_border, color: Colors.green),
+              title: const Text('Dễ'),
+              subtitle: const Text(
+                'Máy đi ngẫu nhiên, thỉnh thoảng theo bestmove thấp',
+              ),
               onTap: () {
                 Navigator.pop(context);
                 setState(() {
@@ -466,11 +489,13 @@ class _XiangqiHomePageState extends ConsumerState<XiangqiHomePage> {
                   boardControllerProvider.notifier,
                 );
                 boardController.startVsEngineMode('easy');
+                _showSnackBar('Bắt đầu chế độ đánh với máy - Cấp độ: Dễ');
               },
             ),
             ListTile(
-              title: Text('Trung bình'),
-              subtitle: Text('Engine suy nghĩ 0.4 giây'),
+              leading: const Icon(Icons.star_half, color: Colors.orange),
+              title: const Text('Trung bình'),
+              subtitle: const Text('Máy đi theo bestmove có điểm thấp hơn'),
               onTap: () {
                 Navigator.pop(context);
                 setState(() {
@@ -480,11 +505,15 @@ class _XiangqiHomePageState extends ConsumerState<XiangqiHomePage> {
                   boardControllerProvider.notifier,
                 );
                 boardController.startVsEngineMode('medium');
+                _showSnackBar(
+                  'Bắt đầu chế độ đánh với máy - Cấp độ: Trung bình',
+                );
               },
             ),
             ListTile(
-              title: Text('Khó'),
-              subtitle: Text('Engine suy nghĩ 0.25 giây'),
+              leading: const Icon(Icons.star, color: Colors.red),
+              title: const Text('Khó'),
+              subtitle: const Text('Máy đi theo bestmove tốt nhất'),
               onTap: () {
                 Navigator.pop(context);
                 setState(() {
@@ -494,10 +523,17 @@ class _XiangqiHomePageState extends ConsumerState<XiangqiHomePage> {
                   boardControllerProvider.notifier,
                 );
                 boardController.startVsEngineMode('hard');
+                _showSnackBar('Bắt đầu chế độ đánh với máy - Cấp độ: Khó');
               },
             ),
           ],
         ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Hủy'),
+          ),
+        ],
       ),
     );
   }
