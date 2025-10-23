@@ -96,6 +96,7 @@ class BoardState {
   final bool isRedAtBottom; // true if red pieces are at bottom, false if black
   final bool analyzing;
   final String? error;
+  final int engineMoveCount; // Count of engine moves for easy mode logic
 
   const BoardState({
     this.fen = defaultXqFen,
@@ -133,6 +134,7 @@ class BoardState {
     this.isRedAtBottom = true, // default: red at bottom
     this.analyzing = false,
     this.error,
+    this.engineMoveCount = 0,
   });
 
   BoardState copyWith({
@@ -171,6 +173,7 @@ class BoardState {
     bool? isRedAtBottom,
     bool? analyzing,
     String? error,
+    int? engineMoveCount,
     bool clearPendingAnimation = false,
   }) {
     return BoardState(
@@ -211,6 +214,7 @@ class BoardState {
       isRedAtBottom: isRedAtBottom ?? this.isRedAtBottom,
       analyzing: analyzing ?? this.analyzing,
       error: error,
+      engineMoveCount: engineMoveCount ?? this.engineMoveCount,
     );
   }
 }
@@ -910,67 +914,58 @@ class BoardController extends StateNotifier<BoardState> {
     _vsEngineTimer?.cancel();
     _vsEngineTimer = Timer(Duration(milliseconds: delayMs), () {
       if (state.isVsEngineMode && state.gameWinner == null) {
-        _requestEngineMove();
+        _engineTurn();
       }
     });
   }
 
-  Future<void> _requestEngineMove() async {
-    if (_engine == null || state.gameWinner != null) return;
+  // Unified engine turn logic that respects difficulty setting
+  Future<void> _engineTurn() async {
+    if (_engine == null || !state.isVsEngineMode || state.gameWinner != null)
+      return;
 
     try {
-      state = state.copyWith(isEngineThinking: true);
-
-      // Check if we already have best lines from previous analysis
-      if (state.bestLines.isNotEmpty) {
-        AppLogger().log('Using existing best lines for engine move');
-        String selectedMove = _selectEngineMove(state.bestLines);
-        if (selectedMove.isNotEmpty && selectedMove != 'null') {
-          AppLogger().log('Engine selected move: $selectedMove');
-          await _applyEngineMove(selectedMove);
-          return;
-        }
-      }
-
-      // If no best lines available, start new analysis
-      AppLogger().log('Starting new engine analysis for move selection');
-
-      // Use getTopMoves to get multiple best moves for difficulty selection
-      await _engine!.getTopMoves(state.fen, state.analysisDepth, state.multiPv);
-
-      // The best lines will be updated by analyzeTopMoves callback
-      // Check if we now have best lines
-      if (state.bestLines.isNotEmpty) {
-        String selectedMove = _selectEngineMove(state.bestLines);
-        if (selectedMove.isNotEmpty && selectedMove != 'null') {
-          AppLogger().log(
-            'Engine selected move from best lines: $selectedMove',
-          );
-          await _applyEngineMove(selectedMove);
-          return;
-        }
-      }
-
-      // Fallback to simple best move if top moves failed
-      final bestMove = await _engine!.getBestMove(
-        state.fen,
-        state.analysisDepth,
+      AppLogger().log(
+        'Engine turn with difficulty: ${state.vsEngineDifficulty}',
       );
-      state = state.copyWith(isEngineThinking: false);
-      if (bestMove.isNotEmpty && bestMove != 'null') {
-        await _applyEngineMove(bestMove);
-        // Ensure animation is committed
-        await Future.delayed(const Duration(milliseconds: 150));
-        if (state.pendingAnimation != null) {
-          await commitEngineAnimatedMove();
+
+      // Số lượng nước cần phân tích phụ thuộc độ khó
+      final difficulty = state.vsEngineDifficulty ?? 'hard';
+      final engineMultiPv = (difficulty == 'hard')
+          ? 1
+          : 2; // easy/medium cần >=2
+
+      // Đồng bộ MultiPV của engine riêng cho lượt máy (không đụng UI)
+      await _engine!.setMultiPV(engineMultiPv);
+
+      // Phân tích vị trí hiện tại để có bestLines mới
+      await analyzeTopMoves(
+        engine: _engine!,
+        fen: _isFromStartpos() ? 'startpos' : state.setupFen!,
+        depth: state.analysisDepth,
+        numMoves: engineMultiPv,
+        moves: currentMoves(),
+      );
+
+      if (state.bestLines.isEmpty) {
+        // fallback chắc chắn: best move
+        final bestMove = await _engine!.getBestMove(
+          _isFromStartpos() ? 'startpos' : state.setupFen!,
+          state.analysisDepth,
+        );
+        if (bestMove.isNotEmpty && bestMove != 'null') {
+          await _applyEngineMove(bestMove);
         }
+        return;
+      }
+
+      // Chọn nước theo độ khó
+      final pick = _selectEngineMove(state.bestLines);
+      if (pick.isNotEmpty && pick != 'null') {
+        await _applyEngineMove(pick);
       }
     } catch (e) {
-      AppLogger().error('Failed to request engine move', e);
-      state = state.copyWith(
-        isEngineThinking: false,
-        engineError: 'Engine move failed: $e',
-      );
+      AppLogger().error('Engine turn failed', e);
     }
   }
 
@@ -992,31 +987,48 @@ class BoardController extends StateNotifier<BoardState> {
     }
   }
 
-  // Easy: Random valid move, but every 2 moves use lower scoring best move
+  // Easy: Random valid move, but every 2 moves use best move, and always use best move when in check
   String _selectEasyMove(List<BestLine> bestLines) {
-    // Every 2 moves, use the lower scoring best move
-    final moveCount = state.moves.length;
-    if (moveCount % 2 == 0 && bestLines.length >= 2) {
-      // Use the move with lower score (worse move)
-      final move1 = bestLines[0];
-      final move2 = bestLines[1];
-      final selectedMove = move1.scoreCp < move2.scoreCp
-          ? move1.firstMove
-          : move2.firstMove;
-      AppLogger().log(
-        'Easy mode: Using lower scoring move (${move1.scoreCp} vs ${move2.scoreCp})',
-      );
-      return selectedMove;
+    // ✅ tính trực tiếp từ FEN hiện tại để chắc chắn
+    final inCheckNow = GameStatusService.isInCheck(state.fen);
+    if (inCheckNow) {
+      AppLogger().log('Easy mode: In check, using best move for defense');
+      return bestLines.first.firstMove;
+    }
+
+    // Every 2 engine moves, use the best move
+    if (state.engineMoveCount % 2 == 0) {
+      AppLogger().log('Easy mode: Every 2nd engine move, using best move');
+      return bestLines.first.firstMove;
     } else {
-      // For random moves, use a random best move (simplified approach)
-      if (bestLines.length >= 2) {
-        final randomIndex = DateTime.now().millisecondsSinceEpoch % 2;
-        final randomMove = bestLines[randomIndex].firstMove;
-        AppLogger().log('Easy mode: Using random best move');
-        return randomMove;
+      // For random moves, get all legal moves and choose randomly
+      final allLegalMoves = XiangqiRules.getAllLegalMoves(state.fen);
+      if (allLegalMoves.isNotEmpty) {
+        // Remove best moves from legal moves to get truly random moves
+        final bestMoves = bestLines.map((line) => line.firstMove).toSet();
+        final randomMoves = allLegalMoves
+            .where((move) => !bestMoves.contains(move))
+            .toList();
+
+        if (randomMoves.isNotEmpty) {
+          final randomIndex =
+              DateTime.now().millisecondsSinceEpoch % randomMoves.length;
+          final randomMove = randomMoves[randomIndex];
+          AppLogger().log(
+            'Easy mode: Using truly random move (not in best moves)',
+          );
+          return randomMove;
+        } else {
+          // Fallback to any legal move if all moves are best moves
+          final randomIndex =
+              DateTime.now().millisecondsSinceEpoch % allLegalMoves.length;
+          final randomMove = allLegalMoves[randomIndex];
+          AppLogger().log('Easy mode: Using random legal move (fallback)');
+          return randomMove;
+        }
       } else {
-        // Fallback to best move
-        AppLogger().log('Easy mode: Using best move (fallback)');
+        // Fallback to best move if no legal moves found
+        AppLogger().log('Easy mode: No legal moves found, using best move');
         return bestLines.first.firstMove;
       }
     }
@@ -1049,67 +1061,6 @@ class BoardController extends StateNotifier<BoardState> {
       'Hard mode: Using best move (score: ${bestLines.first.scoreCp})',
     );
     return selectedMove;
-  }
-
-  Future<void> _makeEngineMove() async {
-    if (_engine == null || !state.isVsEngineMode) return;
-
-    try {
-      AppLogger().log(
-        'Engine making move with difficulty: ${state.vsEngineDifficulty}',
-      );
-
-      // Set MultiPV to 2 for engine move selection (internal, no panel change)
-      await _engine!.setMultiPV(2);
-
-      // Analyze current position consistently with startpos + currentMoves
-      await analyzeTopMoves(
-        engine: _engine!,
-        fen: _isFromStartpos() ? 'startpos' : state.setupFen!,
-        depth: state.analysisDepth,
-        numMoves: 2,
-        moves: currentMoves(),
-      );
-
-      // Wait 1 second after analysis completes before moving
-      await Future.delayed(const Duration(seconds: 1));
-
-      if (state.bestLines.length >= 2) {
-        // Pick the lower-scoring move among top-2
-        final l1 = state.bestLines[0];
-        final l2 = state.bestLines[1];
-        final selectedMove = l1.scoreCp < l2.scoreCp
-            ? l1.firstMove
-            : l2.firstMove;
-        AppLogger().log(
-          'Engine selected lower scoring move: $selectedMove (${l1.scoreCp} vs ${l2.scoreCp})',
-        );
-
-        await _applyEngineMove(selectedMove);
-        return;
-      }
-
-      // Fallback: get best move (already parsed to UCI in engine)
-      final bestMove = await _engine!.getBestMove(
-        _isFromStartpos() ? 'startpos' : state.setupFen!,
-        state.analysisDepth,
-      );
-      if (bestMove.isNotEmpty && bestMove != 'null') {
-        AppLogger().log('Engine selected fallback move: $bestMove');
-        await Future.delayed(const Duration(seconds: 1));
-        await _applyEngineMove(bestMove);
-      }
-    } catch (e) {
-      AppLogger().error('Engine move failed', e);
-      _showNotification(
-        'Engine move failed: ${e.toString()}',
-        backgroundColor: Colors.red,
-        duration: const Duration(seconds: 3),
-      );
-    } finally {
-      // Reset MultiPV back to 1 after engine move
-      await _engine!.setMultiPV(1);
-    }
   }
 
   // Apply engine move with animation
@@ -1219,6 +1170,8 @@ class BoardController extends StateNotifier<BoardState> {
         isEngineThinking: false,
         isEngineTurn: false, // Switch back to human turn
         pendingAnimation: null, // ✅ luôn clear ở đây
+        engineMoveCount:
+            state.engineMoveCount + 1, // Increment engine move count
       );
 
       // Update engine position without waiting for readyok
@@ -1379,7 +1332,7 @@ class BoardController extends StateNotifier<BoardState> {
           AppLogger().log(
             'Switching to engine turn - difficulty: ${state.vsEngineDifficulty}',
           );
-          _makeEngineMove();
+          _engineTurn();
         } else if (!shouldBeEngineTurn && state.isEngineTurn) {
           // Switch to human's turn
           state = state.copyWith(isEngineTurn: false);
@@ -1431,85 +1384,65 @@ class BoardController extends StateNotifier<BoardState> {
       final winner = GameStatusService.getWinner(fen);
       AppLogger().log('Winner: $winner');
 
-      // Handle checkmate (highest priority)
-      if (isCheckmate) {
-        AppLogger().log('CHECKMATE DETECTED!');
-        state = state.copyWith(
-          isInCheck: isInCheck,
-          isCheckmate: isCheckmate,
-          isStalemate: isStalemate,
-          gameWinner: winner,
-        );
-        _showNotification(
-          'Checkmate! ${winner == 'w' ? 'Red' : 'Black'} wins!',
-          backgroundColor: Colors.red,
-          duration: const Duration(seconds: 5),
-        );
-        return;
-      }
-
-      // Handle stalemate
-      if (isStalemate) {
-        AppLogger().log('STALEMATE DETECTED!');
-        state = state.copyWith(
-          isInCheck: isInCheck,
-          isCheckmate: isCheckmate,
-          isStalemate: isStalemate,
-          gameWinner: 'Draw',
-        );
-        _showNotification(
-          'Stalemate! Game is a draw.',
-          backgroundColor: Colors.orange,
-          duration: const Duration(seconds: 5),
-        );
-        return;
-      }
-
-      // Handle check
-      if (isInCheck) {
-        AppLogger().log('CHECK DETECTED!');
-        state = state.copyWith(
-          isInCheck: isInCheck,
-          isCheckmate: isCheckmate,
-          isStalemate: isStalemate,
-          gameWinner: winner,
-        );
-        _showNotification(
-          'Check!',
-          backgroundColor: Colors.yellow,
-          duration: const Duration(seconds: 2),
-        );
-        return;
-      }
-
-      // Handle king captured
-      if (winner != null && winner != 'Draw') {
-        AppLogger().log('KING CAPTURED! Winner: $winner');
-        state = state.copyWith(
-          isInCheck: isInCheck,
-          isCheckmate: isCheckmate,
-          isStalemate: isStalemate,
-          gameWinner: winner,
-        );
-        _showNotification(
-          'King captured! ${winner == 'w' ? 'Red' : 'Black'} wins!',
-          backgroundColor: Colors.red,
-          duration: const Duration(seconds: 5),
-        );
-        return;
-      }
-
-      // Normal position - just update state
+      // ✅ luôn đồng bộ cờ trạng thái vào state
       state = state.copyWith(
         isInCheck: isInCheck,
         isCheckmate: isCheckmate,
         isStalemate: isStalemate,
         gameWinner: winner,
       );
-      AppLogger().log('Normal position - no special status');
+
+      // Handle checkmate (highest priority)
+      if (isCheckmate) {
+        final sideToMove = FenParser.getSideToMove(fen);
+        final winningPlayer = sideToMove == 'w' ? 'Black' : 'Red';
+        AppLogger().log(
+          '*** SHOWING CHECKMATE NOTIFICATION for $winningPlayer ***',
+        );
+        _showNotification(
+          '$winningPlayer WINS! Checkmate!',
+          backgroundColor: Colors.green,
+          duration: const Duration(seconds: 5),
+        );
+        return; // Don't check other conditions if checkmate
+      }
+
+      // Handle king captured (if not checkmate)
+      if (winner != null && winner != 'Draw') {
+        AppLogger().log(
+          '*** SHOWING KING CAPTURED NOTIFICATION for $winner ***',
+        );
+        _showNotification(
+          '$winner WINS! King captured!',
+          backgroundColor: Colors.green,
+          duration: const Duration(seconds: 5),
+        );
+        return; // Don't check other conditions if game is over
+      }
+
+      // Handle check (only if not checkmate or game over)
+      if (isInCheck) {
+        final sideToMove = FenParser.getSideToMove(fen);
+        final currentPlayer = sideToMove == 'w' ? 'Red' : 'Black';
+        AppLogger().log(
+          '*** SHOWING CHECK NOTIFICATION for $currentPlayer ***',
+        );
+        _showNotification(
+          '$currentPlayer is in CHECK!',
+          backgroundColor: Colors.orange,
+          duration: const Duration(seconds: 4),
+        );
+      } else if (isStalemate) {
+        // Check for stalemate only if not in check and game is not over
+        AppLogger().log('*** SHOWING STALEMATE NOTIFICATION ***');
+        _showNotification(
+          'DRAW! Stalemate!',
+          backgroundColor: Colors.blue,
+          duration: const Duration(seconds: 5),
+        );
+      }
     } catch (e, stackTrace) {
       AppLogger().error('Error checking game status', e, stackTrace);
-      // Don't throw - this is not critical enough to crash the app
     }
   }
 
