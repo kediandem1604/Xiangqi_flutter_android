@@ -161,28 +161,6 @@ class PikafishEngine {
     }
   }
 
-  Future<bool> _canExecDirect(String path) async {
-    try {
-      final pr = await Process.start(
-        path,
-        [],
-        runInShell: false,
-        mode: ProcessStartMode.detachedWithStdio,
-      );
-      // If it can run, send "uci\nquit\n"
-      pr.stdin.writeln('uci');
-      pr.stdin.writeln('quit');
-      await pr.exitCode.timeout(
-        const Duration(milliseconds: 300),
-        onTimeout: () => -1,
-      );
-      return true;
-    } catch (e) {
-      debugPrint('$_tag: Cannot exec directly: $e');
-      return false;
-    }
-  }
-
   /// Spawn engine process (simplified like OnlyEngine)
   Future<Process> _spawn(String execPath) async {
     debugPrint('$_tag: === Spawning engine: $execPath ===');
@@ -380,17 +358,40 @@ class PikafishEngine {
     return completer.future;
   }
 
-  /// Get best move for given position
-  Future<String> getBestMove(String fen, int depth) async {
+  /// Set engine position with moves
+  Future<void> setPosition(String fen, List<String> moves) async {
     if (!_isInitialized) {
       throw Exception('Engine not initialized');
     }
 
-    // Check if engine process is still alive
-    if (_engineProcess == null || _engineProcess!.exitCode != null) {
-      debugPrint('$_tag: Engine process died, reinitializing...');
-      _isInitialized = false;
-      await initialize();
+    // Build position command
+    String positionCmd;
+    if (fen == 'startpos') {
+      if (moves.isNotEmpty) {
+        positionCmd = 'position startpos moves ${moves.join(' ')}';
+      } else {
+        positionCmd = 'position startpos';
+      }
+    } else {
+      if (moves.isNotEmpty) {
+        positionCmd = 'position fen $fen moves ${moves.join(' ')}';
+      } else {
+        positionCmd = 'position fen $fen';
+      }
+    }
+
+    debugPrint('$_tag: Setting position: $positionCmd');
+    _sendCommand(positionCmd);
+
+    // Wait for ready with longer timeout
+    _sendCommand('isready');
+    await _waitForResponse('readyok', 5000);
+  }
+
+  /// Get best move for given position
+  Future<String> getBestMove(String fen, int depth) async {
+    if (!_isInitialized) {
+      throw Exception('Engine not initialized');
     }
 
     // Send position command
@@ -403,36 +404,47 @@ class PikafishEngine {
     // Send go command
     _sendCommand('go depth $depth');
 
-    // Wait for bestmove
-    final bestMove = await _waitForResponse('bestmove', 10000);
-    debugPrint('$_tag: Found bestmove: $bestMove');
+    // Wait for bestmove with longer timeout
+    final line = await _waitForResponse('bestmove', 15000);
+    debugPrint('$_tag: Found bestmove: $line');
+
+    // Parse: "bestmove e2e4 ponder ..." -> "e2e4"
+    final parts = line.split(' ');
+    final idx = parts.indexOf('bestmove');
+    final bestMove = (idx >= 0 && idx + 1 < parts.length) ? parts[idx + 1] : '';
 
     return bestMove;
   }
 
   /// Get top N moves for given position
-  Future<String> getTopMoves(String fen, int depth, int numMoves) async {
+  Future<String> getTopMoves(
+    String fen,
+    int depth,
+    int numMoves, [
+    List<String>? moves,
+  ]) async {
     if (!_isInitialized) {
       throw Exception('Engine not initialized');
-    }
-
-    // Check if engine process is still alive
-    if (_engineProcess == null || _engineProcess!.exitCode != null) {
-      debugPrint('$_tag: Engine process died, reinitializing...');
-      _isInitialized = false;
-      await initialize();
     }
 
     // Set MultiPV and wait ready
     _sendCommand('setoption name MultiPV value $numMoves');
     _sendCommand('isready');
-    await _waitForResponse('readyok', 5000);
+    await _waitForResponse('readyok', 3000);
 
     // Send position command
     if (fen == 'startpos') {
-      _sendCommand('position startpos');
+      if (moves != null && moves.isNotEmpty) {
+        _sendCommand('position startpos moves ${moves.join(' ')}');
+      } else {
+        _sendCommand('position startpos');
+      }
     } else {
-      _sendCommand('position fen $fen');
+      if (moves != null && moves.isNotEmpty) {
+        _sendCommand('position fen $fen moves ${moves.join(' ')}');
+      } else {
+        _sendCommand('position fen $fen');
+      }
     }
 
     // Send go command
@@ -452,17 +464,17 @@ class PikafishEngine {
     });
 
     // Wait for bestmove (longer for MultiPV)
-    final perDepthMs = 2000;
-    final extraPerPvMs = 2000;
+    final perDepthMs = 3000;
+    final extraPerPvMs = 3000;
     final timeoutMs = (depth * perDepthMs + (numMoves - 1) * extraPerPvMs)
-        .clamp(10000, 60000);
-    await _waitForResponse('bestmove', timeoutMs as int);
+        .clamp(15000, 90000);
+    await _waitForResponse('bestmove', timeoutMs);
     subscription.cancel();
 
     // Reset MultiPV to 1 and wait ready
     _sendCommand('setoption name MultiPV value 1');
     _sendCommand('isready');
-    await _waitForResponse('readyok', 5000);
+    await _waitForResponse('readyok', 3000);
 
     final result = results.join('\n');
     debugPrint('$_tag: Top moves result: $result');
@@ -483,6 +495,49 @@ class PikafishEngine {
     _outputController?.close();
     _isInitialized = false;
     debugPrint('$_tag: Engine closed');
+  }
+
+  /// Set MultiPV value
+  Future<void> setMultiPV(int value) async {
+    if (!_isInitialized) {
+      throw Exception('Engine not initialized');
+    }
+
+    _sendCommand('setoption name MultiPV value $value');
+    _sendCommand('isready'); // <- thêm dòng này
+    await _waitForResponse('readyok', 3000); // giờ mới đợi readyok
+    debugPrint('$_tag: MultiPV set to $value');
+  }
+
+  /// Stop any ongoing search (for reset)
+  Future<void> stop() async {
+    if (!_isInitialized) {
+      return;
+    }
+
+    _sendCommand('stop');
+
+    // Wait for bestmove to ensure clean state
+    try {
+      await _waitForResponse('bestmove', 5000);
+    } catch (e) {
+      // Ignore timeout - engine might not be searching
+      debugPrint('$_tag: No ongoing search to stop: $e');
+    }
+  }
+
+  /// Start a new game
+  Future<void> newGame() async {
+    if (!_isInitialized) {
+      throw Exception('Engine not initialized');
+    }
+
+    // Start new game
+    _sendCommand('ucinewgame');
+    // PHẢI có isready thì engine mới trả readyok
+    _sendCommand('isready');
+    await _waitForResponse('readyok', 3000);
+    debugPrint('$_tag: New game started');
   }
 
   /// Check if engine is initialized

@@ -1,35 +1,86 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'pikafish_engine.dart';
+import 'features/board/board_controller.dart';
+import 'features/board/best_moves_panel.dart';
+import 'features/board/board_view.dart';
+import 'features/settings/engine_settings_dialog.dart';
+import 'features/settings/settings_provider.dart';
+import 'widgets/side_selection_dialog.dart';
+import 'widgets/game_notification.dart';
+import 'core/logger.dart';
+import 'services/saved_games_service.dart';
 
-void main() {
-  runApp(const MyApp());
+// Provider for the initialized engine
+final engineProvider = StateProvider<PikafishEngine?>((ref) => null);
+
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+
+  // Initialize logger
+  await AppLogger.ensureInitialized();
+
+  runApp(const ProviderScope(child: XiangqiApp()));
 }
 
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+class XiangqiApp extends StatelessWidget {
+  const XiangqiApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Pikafish Engine Test',
-      theme: ThemeData(primarySwatch: Colors.blue, useMaterial3: true),
-      home: const MyHomePage(),
+      title: 'Xiangqi Flutter',
+      theme: ThemeData(
+        colorScheme: ColorScheme.fromSeed(seedColor: Colors.brown),
+        useMaterial3: true,
+      ),
+      home: const XiangqiHomePage(),
     );
   }
 }
 
-class MyHomePage extends StatefulWidget {
-  const MyHomePage({super.key});
+class XiangqiHomePage extends ConsumerStatefulWidget {
+  const XiangqiHomePage({super.key});
 
   @override
-  State<MyHomePage> createState() => _MyHomePageState();
+  ConsumerState<XiangqiHomePage> createState() => _XiangqiHomePageState();
 }
 
-class _MyHomePageState extends State<MyHomePage> {
+class _XiangqiHomePageState extends ConsumerState<XiangqiHomePage> {
   final PikafishEngine _engine = PikafishEngine();
   bool _engineInitialized = false;
   String _output = 'Engine output will appear here...';
   bool _isLoading = false;
+  String _currentGameMode = 'normal'; // Track current game mode
+
+  @override
+  void initState() {
+    super.initState();
+    // Initialize board controller
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      final boardController = ref.read(boardControllerProvider.notifier);
+      await boardController.init();
+
+      // Show side selection dialog
+      _showSideSelectionAndInit();
+    });
+  }
+
+  Future<void> _showSideSelectionAndInit() async {
+    final side = await showSideSelectionDialog(context);
+    if (side != null) {
+      // Set board orientation based on side selection
+      final controller = ref.read(boardControllerProvider.notifier);
+      if (side == PlayerSide.black) {
+        // If user selected Black, put Black at bottom (Red at top)
+        await controller.setRedAtBottom(false);
+      } else {
+        // If user selected Red, put Red at bottom
+        await controller.setRedAtBottom(true);
+      }
+      await _initializeEngine();
+    }
+  }
 
   @override
   void dispose() {
@@ -49,6 +100,21 @@ class _MyHomePageState extends State<MyHomePage> {
     });
   }
 
+  Future<void> _runAutomaticAnalysis() async {
+    try {
+      _updateOutput('Running automatic analysis...\n');
+      final boardCtrl = ref.read(boardControllerProvider.notifier);
+      await boardCtrl.analyzeTopMoves(
+        engine: _engine,
+        fen: PikafishEngine.startingPosition,
+        depth: 8,
+      );
+      _updateOutput('Analysis completed!\n');
+    } catch (e) {
+      _updateOutput('Analysis failed: $e\n');
+    }
+  }
+
   Future<void> _initializeEngine() async {
     try {
       _setLoading(true);
@@ -59,13 +125,26 @@ class _MyHomePageState extends State<MyHomePage> {
       await _engine.initialize();
       _updateOutput('Debug: _engine.initialize() completed successfully\n');
 
-      _engineInitialized = true;
+      // Lưu engine vào provider
+      ref.read(engineProvider.notifier).state = _engine;
+
+      // Set engine và settings cho BoardController
+      final boardController = ref.read(boardControllerProvider.notifier);
+      boardController.setEngine(_engine);
+      // Sử dụng default settings
+      boardController.setSettings(8, 1);
 
       String result = 'Pikafish Engine initialized successfully!\n';
       result += 'Status: Ready for commands\n';
       _updateOutput(result);
 
       _showSnackBar('Engine initialized successfully');
+
+      // Tự động phân tích best moves sau khi khởi tạo engine
+      await _runAutomaticAnalysis();
+
+      // Chỉ hiển thị giao diện sau khi có kết quả phân tích
+      _engineInitialized = true;
     } catch (e) {
       _updateOutput('Engine initialization failed: $e\n');
       _updateOutput('Error type: ${e.runtimeType}\n');
@@ -78,232 +157,564 @@ class _MyHomePageState extends State<MyHomePage> {
     }
   }
 
-  Future<void> _runTest() async {
-    if (!_engineInitialized) {
-      _showSnackBar('Please initialize engine first');
-      return;
-    }
-
-    try {
-      _setLoading(true);
-      _updateOutput('Running comprehensive engine test...\n');
-
-      String result = '=== Pikafish Engine Test ===\n\n';
-
-      // Test 1: UCI command
-      result += '1. UCI Test:\n';
-      await _engine.sendCommand('uci');
-      result += 'UCI command sent\n\n';
-
-      // Test 2: Ready test
-      result += '2. Ready Test:\n';
-      await _engine.sendCommand('isready');
-      result += 'IsReady command sent\n\n';
-
-      // Test 3: Position test
-      result += '3. Position Test:\n';
-      await _engine.sendCommand('position startpos');
-      result += 'Position set to starting position\n\n';
-
-      // Test 4: Real search test
-      result += '4. Real Search Test:\n';
-      String bestMove = await _engine.getBestMove('startpos', 1);
-      result += 'Search result: $bestMove\n\n';
-
-      // Test 5: Deeper search
-      result += '5. Deeper Search Test:\n';
-      String deeperMove = await _engine.getBestMove('startpos', 3);
-      result += 'Deeper search result: $deeperMove\n\n';
-
-      result += '=== All tests completed successfully! ===\n';
-      result += 'Engine is working and returning real best moves!';
-
-      _updateOutput(result);
-      _showSnackBar('Test completed successfully');
-    } catch (e) {
-      _updateOutput('Test failed: $e');
-      _showSnackBar('Test failed');
-    } finally {
-      _setLoading(false);
-    }
-  }
-
-  Future<void> _getBestMove() async {
-    if (!_engineInitialized) {
-      _showSnackBar('Please initialize engine first');
-      return;
-    }
-
-    try {
-      _setLoading(true);
-      _updateOutput('Getting best move...\n');
-      String bestMove = await _engine.getBestMove('startpos', 1);
-      _updateOutput('Best move: $bestMove');
-      _showSnackBar('Best move: $bestMove');
-    } catch (e) {
-      _updateOutput('Error getting best move: $e');
-      _showSnackBar('Error getting best move');
-    } finally {
-      _setLoading(false);
-    }
-  }
-
-  Future<void> _getTopMoves() async {
-    if (!_engineInitialized) {
-      _showSnackBar('Please initialize engine first');
-      return;
-    }
-
-    try {
-      _setLoading(true);
-      _updateOutput('Getting top 3 moves...\n');
-      String topMoves = await _engine.getTopMoves('startpos', 5, 3);
-
-      String result = '=== Top 3 Moves Analysis ===\n\n';
-      result += 'Position: Starting position\n';
-      result += 'Depth: 5\n';
-      result += 'MultiPV: 3\n\n';
-      result += 'Analysis Results:\n';
-      result += '$topMoves\n\n';
-      result += '=== Analysis Complete ===';
-
-      _updateOutput(result);
-      _showSnackBar('Top 3 moves analysis completed');
-    } catch (e) {
-      _updateOutput('Error getting top moves: $e');
-      _showSnackBar('Error getting top moves');
-    } finally {
-      _setLoading(false);
-    }
-  }
-
-  Future<void> _testPosition(String positionName, String fen) async {
-    if (!_engineInitialized) {
-      _showSnackBar('Please initialize engine first');
-      return;
-    }
-
-    try {
-      _setLoading(true);
-      _updateOutput('Testing $positionName...\n');
-
-      String result = '=== $positionName Analysis ===\n\n';
-      result += 'FEN: $fen\n\n';
-
-      // Get best move
-      result += '1. Best Move Analysis:\n';
-      String bestMove = await _engine.getBestMove(fen, 5);
-      result += 'Best move: $bestMove\n\n';
-
-      // Get top 3 moves
-      result += '2. Top 3 Moves Analysis:\n';
-      String topMoves = await _engine.getTopMoves(fen, 5, 3);
-      result += '$topMoves\n\n';
-
-      result += '=== Analysis Complete ===';
-
-      _updateOutput(result);
-      _showSnackBar('$positionName analysis completed');
-    } catch (e) {
-      _updateOutput('Error testing $positionName: $e');
-      _showSnackBar('Error testing $positionName');
-    } finally {
-      _setLoading(false);
-    }
-  }
-
   void _showSnackBar(String message) {
     ScaffoldMessenger.of(
       context,
     ).showSnackBar(SnackBar(content: Text(message)));
   }
 
-  Widget _buildButton(String text, VoidCallback onPressed) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4.0),
-      child: SizedBox(
-        width: double.infinity,
-        child: ElevatedButton(
-          onPressed: _isLoading ? null : onPressed,
-          child: Text(text),
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Xiangqi Engine'),
+        backgroundColor: Colors.orange[200],
+      ),
+      drawer: Drawer(
+        child: SafeArea(
+          child: Column(
+            children: [
+              // Header với màu nâu đậm
+              Container(
+                width: double.infinity,
+                height: 120,
+                decoration: const BoxDecoration(
+                  color: Color(0xFF7A5C4D), // Màu nâu đậm như trong ảnh
+                ),
+                child: const Center(
+                  child: Text(
+                    'Menu',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 24,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              ),
+              // Menu items với màu nền nhạt và vạch kẻ
+              Expanded(
+                child: Container(
+                  color: const Color(0xFFFDF7F2), // Màu nền nhạt như trong ảnh
+                  child: ListView(
+                    padding: EdgeInsets.zero,
+                    children: [
+                      // Nhóm 1: Chế độ chơi
+                      _buildMenuItem(
+                        icon: Icons.sports_esports,
+                        title: 'Chế độ chơi bình thường',
+                        isHighlighted: _currentGameMode == 'normal',
+                        onTap: () {
+                          Navigator.pop(context);
+                          setState(() {
+                            _currentGameMode = 'normal';
+                          });
+                          final boardController = ref.read(
+                            boardControllerProvider.notifier,
+                          );
+                          boardController.stopVsEngineMode();
+                        },
+                      ),
+                      _buildMenuItem(
+                        icon: Icons.smart_toy,
+                        title: 'Đánh với máy',
+                        subtitle: 'Chọn cấp độ khó',
+                        isHighlighted: _currentGameMode == 'vs_engine',
+                        onTap: () {
+                          Navigator.pop(context);
+                          _showDifficultyDialog();
+                        },
+                      ),
+                      _buildDivider(),
+
+                      // Nhóm 2: Cài đặt
+                      _buildMenuItem(
+                        icon: Icons.settings,
+                        title: 'Cài đặt engine',
+                        onTap: () {
+                          Navigator.pop(context);
+                          showDialog(
+                            context: context,
+                            builder: (context) => const EngineSettingsDialog(),
+                          );
+                        },
+                      ),
+                      _buildMenuItem(
+                        icon: Icons.grid_view,
+                        title: 'Setup Board',
+                        onTap: () {
+                          Navigator.pop(context);
+                          final boardController = ref.read(
+                            boardControllerProvider.notifier,
+                          );
+                          boardController.enterSetupMode();
+                        },
+                      ),
+                      _buildDivider(),
+
+                      // Nhóm 3: Lưu trữ
+                      _buildMenuItem(
+                        icon: Icons.save_alt,
+                        title: 'Lưu ván cờ',
+                        onTap: () {
+                          Navigator.pop(context);
+                          _showSaveGameDialog();
+                        },
+                      ),
+                      _buildMenuItem(
+                        icon: Icons.history,
+                        title: 'Ván đã lưu',
+                        onTap: () {
+                          Navigator.pop(context);
+                          _showSavedGamesDialog();
+                        },
+                      ),
+                      _buildDivider(),
+
+                      // Nhóm 4: Hệ thống
+                      _buildMenuItem(
+                        icon: Icons.bug_report,
+                        title: 'Log lỗi',
+                        onTap: () {
+                          Navigator.pop(context);
+                          _showLogsDialog();
+                        },
+                      ),
+                      _buildDivider(),
+
+                      // About
+                      _buildMenuItem(
+                        icon: Icons.info_outline,
+                        title: 'About',
+                        onTap: () {
+                          Navigator.pop(context);
+                          _showAboutDialog();
+                        },
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+      body: GameNotificationOverlay(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(16.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              // Engine status
+              if (_engineInitialized)
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 8,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.grey[200],
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Consumer(
+                    builder: (context, ref, _) {
+                      final boardState = ref.watch(boardControllerProvider);
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('Engine: Pikafish'),
+                          if (boardState.isVsEngineMode)
+                            Text(
+                              'Mode: VS Engine (${boardState.vsEngineDifficulty})',
+                            ),
+                          if (boardState.isInCheck)
+                            Text(
+                              '⚠️ CHECK!',
+                              style: TextStyle(color: Colors.red),
+                            ),
+                          if (boardState.isCheckmate)
+                            Text(
+                              '🏆 CHECKMATE!',
+                              style: TextStyle(color: Colors.red),
+                            ),
+                          if (boardState.gameWinner != null)
+                            Text(
+                              'Winner: ${boardState.gameWinner}',
+                              style: TextStyle(color: Colors.green),
+                            ),
+                        ],
+                      );
+                    },
+                  ),
+                ),
+              const SizedBox(height: 16),
+
+              // Board view
+              if (_engineInitialized) ...[
+                Consumer(
+                  builder: (context, ref, _) {
+                    final st = ref.watch(boardControllerProvider);
+                    return Center(
+                      child: SizedBox(
+                        width: MediaQuery.of(context).size.width * 0.9,
+                        child: BoardView(arrows: st.arrows),
+                      ),
+                    );
+                  },
+                ),
+                const SizedBox(height: 12),
+
+                // Move history and controls
+                Consumer(
+                  builder: (context, ref, _) {
+                    final st = ref.watch(boardControllerProvider);
+                    final ctrl = ref.read(boardControllerProvider.notifier);
+                    return Column(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: Colors.grey[100],
+                            border: Border.all(color: Colors.grey[300]!),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Align(
+                            alignment: Alignment.centerLeft,
+                            child: Text(
+                              'Move History: ${st.moves.take(st.pointer).join(' ')}',
+                              style: const TextStyle(
+                                fontFamily: 'monospace',
+                                fontSize: 12,
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                          children: [
+                            OutlinedButton(
+                              onPressed: st.canBack ? ctrl.back : null,
+                              child: const Text('Back'),
+                            ),
+                            OutlinedButton(
+                              onPressed: () async {
+                                await ctrl.resetWithCallback(() {
+                                  // Reset UI settings to default
+                                  ref.read(multipvProvider.notifier).state = 1;
+                                  ref
+                                          .read(thinkTimeSecProvider.notifier)
+                                          .state =
+                                      10;
+                                  ref.read(depthProvider.notifier).state = 8;
+                                });
+                              },
+                              child: const Text('Reset'),
+                            ),
+                            OutlinedButton(
+                              onPressed: st.canNext ? ctrl.next : null,
+                              child: const Text('Next'),
+                            ),
+                          ],
+                        ),
+                      ],
+                    );
+                  },
+                ),
+              ],
+              const SizedBox(height: 16),
+
+              // Best moves panel
+              if (_engineInitialized) ...[
+                Consumer(
+                  builder: (context, ref, _) {
+                    return SizedBox(height: 220, child: BestMovesPanel());
+                  },
+                ),
+                const SizedBox(height: 32),
+              ],
+
+              if (_isLoading)
+                const Padding(
+                  padding: EdgeInsets.all(16.0),
+                  child: Center(child: CircularProgressIndicator()),
+                ),
+            ],
+          ),
         ),
       ),
     );
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Pikafish Engine Test'),
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-      ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
+  void _showDifficultyDialog() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Chọn cấp độ khó'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            const Text(
-              'Pikafish Engine Test',
-              style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
-              textAlign: TextAlign.center,
+            ListTile(
+              title: Text('Dễ'),
+              subtitle: Text('Engine suy nghĩ 0.5 giây'),
+              onTap: () {
+                Navigator.pop(context);
+                setState(() {
+                  _currentGameMode = 'vs_engine';
+                });
+                final boardController = ref.read(
+                  boardControllerProvider.notifier,
+                );
+                boardController.startVsEngineMode('easy');
+              },
             ),
-            const SizedBox(height: 32),
-
-            _buildButton('Initialize Engine', _initializeEngine),
-            _buildButton('Run Full Test', _runTest),
-            _buildButton('Get Best Move', _getBestMove),
-            _buildButton('Get Top 3 Moves', _getTopMoves),
-            _buildButton(
-              'Test Opening Position',
-              () => _testPosition(
-                'Opening Position',
-                PikafishEngine.startingPosition,
-              ),
+            ListTile(
+              title: Text('Trung bình'),
+              subtitle: Text('Engine suy nghĩ 0.4 giây'),
+              onTap: () {
+                Navigator.pop(context);
+                setState(() {
+                  _currentGameMode = 'vs_engine';
+                });
+                final boardController = ref.read(
+                  boardControllerProvider.notifier,
+                );
+                boardController.startVsEngineMode('medium');
+              },
             ),
-            _buildButton(
-              'Test Mid-game Position',
-              () => _testPosition(
-                'Mid-game Position',
-                PikafishEngine.midgamePosition,
-              ),
+            ListTile(
+              title: Text('Khó'),
+              subtitle: Text('Engine suy nghĩ 0.25 giây'),
+              onTap: () {
+                Navigator.pop(context);
+                setState(() {
+                  _currentGameMode = 'vs_engine';
+                });
+                final boardController = ref.read(
+                  boardControllerProvider.notifier,
+                );
+                boardController.startVsEngineMode('hard');
+              },
             ),
-            _buildButton(
-              'Test Endgame Position',
-              () => _testPosition(
-                'Endgame Position',
-                PikafishEngine.endgamePosition,
-              ),
-            ),
-
-            const SizedBox(height: 32),
-            const Text(
-              'Engine Output:',
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 8),
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(16.0),
-              decoration: BoxDecoration(
-                color: Colors.grey[100],
-                border: Border.all(color: Colors.grey[300]!),
-                borderRadius: BorderRadius.circular(8.0),
-              ),
-              child: Text(
-                _output,
-                style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
-              ),
-            ),
-
-            if (_isLoading)
-              const Padding(
-                padding: EdgeInsets.all(16.0),
-                child: Center(child: CircularProgressIndicator()),
-              ),
           ],
         ),
       ),
+    );
+  }
+
+  void _showSaveGameDialog() {
+    final nameController = TextEditingController();
+    final descriptionController = TextEditingController();
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Lưu ván cờ'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: nameController,
+              decoration: InputDecoration(labelText: 'Tên ván cờ'),
+            ),
+            TextField(
+              controller: descriptionController,
+              decoration: InputDecoration(labelText: 'Mô tả (tùy chọn)'),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text('Hủy'),
+          ),
+          TextButton(
+            onPressed: () async {
+              if (nameController.text.isNotEmpty) {
+                final boardController = ref.read(
+                  boardControllerProvider.notifier,
+                );
+                final success = await boardController.saveCurrentGame(
+                  nameController.text,
+                  description: descriptionController.text.isEmpty
+                      ? null
+                      : descriptionController.text,
+                );
+
+                Navigator.pop(context);
+                _showSnackBar(success ? 'Lưu thành công!' : 'Lưu thất bại!');
+              }
+            },
+            child: Text('Lưu'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showSavedGamesDialog() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Ván đã lưu'),
+        content: SizedBox(
+          width: double.maxFinite,
+          height: 300,
+          child: FutureBuilder(
+            future: SavedGamesService.instance.loadSavedGames(),
+            builder: (context, snapshot) {
+              if (snapshot.connectionState == ConnectionState.waiting) {
+                return Center(child: CircularProgressIndicator());
+              }
+
+              if (!snapshot.hasData || snapshot.data!.isEmpty) {
+                return Center(child: Text('Chưa có ván cờ nào được lưu'));
+              }
+
+              return ListView.builder(
+                itemCount: snapshot.data!.length,
+                itemBuilder: (context, index) {
+                  final game = snapshot.data![index];
+                  return ListTile(
+                    title: Text(game.name),
+                    subtitle: Text(
+                      '${game.totalMoves} nước đi - ${game.formattedDate}',
+                    ),
+                    trailing: IconButton(
+                      icon: Icon(Icons.play_arrow),
+                      onPressed: () {
+                        Navigator.pop(context);
+                        final boardController = ref.read(
+                          boardControllerProvider.notifier,
+                        );
+                        boardController.loadSavedGame(game.id);
+                        _showSnackBar('Đã tải ván cờ: ${game.name}');
+                      },
+                    ),
+                  );
+                },
+              );
+            },
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text('Đóng'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showLogsDialog() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Log lỗi'),
+        content: SizedBox(
+          width: double.maxFinite,
+          height: 300,
+          child: SingleChildScrollView(child: Text(_output)),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text('Đóng'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showAboutDialog() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('About'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Xiangqi Flutter'),
+            Text('Version: 1.0.0'),
+            Text('Engine: Pikafish'),
+            Text('Protocol: UCI'),
+            SizedBox(height: 16),
+            Text(
+              'Một ứng dụng cờ tướng được phát triển bằng Flutter với tích hợp engine AI mạnh mẽ.',
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text('Đóng'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // Helper method để tạo menu item với màu sắc như trong ảnh
+  Widget _buildMenuItem({
+    required IconData icon,
+    required String title,
+    String? subtitle,
+    required VoidCallback onTap,
+    bool isHighlighted = false,
+  }) {
+    return ListTile(
+      leading: Icon(
+        icon,
+        color: isHighlighted
+            ? const Color(0xFF7A5C4D) // Màu nâu đậm khi được highlight
+            : const Color(0xFF9C6E5B), // Màu icon như trong ảnh
+      ),
+      title: Text(
+        title,
+        style: TextStyle(
+          color: isHighlighted
+              ? const Color(0xFF7A5C4D) // Màu nâu đậm khi được highlight
+              : const Color(0xFF9C6E5B), // Màu text chính như trong ảnh
+          fontSize: 16,
+          fontWeight: isHighlighted ? FontWeight.bold : FontWeight.normal,
+        ),
+      ),
+      subtitle: subtitle != null
+          ? Text(
+              subtitle,
+              style: TextStyle(
+                color: isHighlighted
+                    ? const Color(0xFF7A5C4D) // Màu nâu đậm khi được highlight
+                    : const Color(0xFFB28B7A), // Màu subtitle như trong ảnh
+                fontSize: 14,
+                fontWeight: isHighlighted ? FontWeight.bold : FontWeight.normal,
+              ),
+            )
+          : null,
+      onTap: onTap,
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      tileColor: isHighlighted
+          ? const Color(0xFFF5F0ED) // Màu nền nhạt hơn khi được highlight
+          : Colors.transparent,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(8),
+        side: isHighlighted
+            ? const BorderSide(color: Color(0xFF7A5C4D), width: 1)
+            : BorderSide.none,
+      ),
+    );
+  }
+
+  // Helper method để tạo divider với màu sắc như trong ảnh
+  Widget _buildDivider() {
+    return const Divider(
+      height: 1,
+      thickness: 1,
+      color: Color(0xFFE0E0E0), // Màu divider nhạt như trong ảnh
+      indent: 16,
+      endIndent: 16,
     );
   }
 }
