@@ -43,11 +43,13 @@ String? pieceAssetFromSymbol(String s) {
 class BoardView extends ConsumerStatefulWidget {
   final List<ArrowData> arrows; // list of arrow from->to in board coordinates
   final bool showStartPosition;
+  final bool isLocked; // khóa bàn cờ khi ván đã kết thúc
 
   const BoardView({
     super.key,
     this.arrows = const [],
     this.showStartPosition = true,
+    this.isLocked = false,
   });
 
   @override
@@ -136,105 +138,119 @@ class _BoardViewState extends ConsumerState<BoardView>
           final cellW = renderW / 9.0;
           final cellH = renderH / 10.0;
 
-          return Container(
-            decoration: BoxDecoration(
-              border: Border.all(color: Colors.brown[800]!, width: 3),
-              borderRadius: BorderRadius.circular(12),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withOpacity(0.2),
-                  blurRadius: 8,
-                  offset: const Offset(0, 4),
-                ),
-              ],
-            ),
+          return AbsorbPointer(
+            absorbing: widget.isLocked,
             child: Container(
-              decoration: BoxDecoration(borderRadius: BorderRadius.circular(8)),
-              child: Stack(
-                children: [
-                  // NỀN: hiển thị khi _boardReady (nhiều máy vẫn hiện ngay vì cache nhanh)
-                  if (_boardReady)
-                    Positioned(
-                      left: originX,
-                      top: originY,
-                      width: renderW,
-                      height: renderH,
-                      child: SvgPicture.asset(_boardAsset, fit: BoxFit.fill),
-                    )
-                  else
-                    // placeholder mỏng, tránh blank frame
-                    Positioned(
-                      left: originX,
-                      top: originY,
-                      width: renderW,
-                      height: renderH,
-                      child: const SizedBox.shrink(),
-                    ),
-                  // MŨI TÊN: xuất hiện SAU quân + (tuỳ chọn) fade-in
-                  if (_piecesReady &&
-                      widget.arrows.isNotEmpty &&
-                      !state.analyzing)
-                    FadeTransition(
-                      opacity: _fade,
-                      child: CustomPaint(
-                        painter: _ArrowPainter(
-                          arrows: widget.arrows,
-                          cellWidth: cellW,
-                          cellHeight: cellH,
-                          originX: originX,
-                          originY: originY,
-                          isRedAtBottom: state.isRedAtBottom,
-                        ),
-                        child: Container(),
-                      ),
-                    ),
-                  // QUÂN CỜ: chỉ hiển thị khi _piecesReady
-                  if (_piecesReady && widget.showStartPosition)
-                    ..._buildPiecesFromFen(
-                      cellW,
-                      cellH,
-                      state,
-                      originX,
-                      originY,
-                    ),
-
-                  // CHẤM GỢI Ý: sau khi quân sẵn sàng
-                  if (_piecesReady)
-                    ..._buildPossibleMoveIndicators(
-                      state,
-                      cellW,
-                      cellH,
-                      originX,
-                      originY,
-                    ),
-
-                  // ANIMATION DI CHUYỂN QUÂN: cũng nên chờ _piecesReady
-                  if (_piecesReady)
-                    _buildMoveAnimation(
-                      state,
-                      Size(constraints.maxWidth, constraints.maxHeight),
-                      ref,
-                      cellW,
-                      cellH,
-                      originX,
-                      originY,
-                    ),
-                  // Gesture detector for piece interaction
-                  GestureDetector(
-                    onTapDown: (details) => _onBoardTap(
-                      details.localPosition,
-                      state,
-                      controller,
-                      cellW,
-                      cellH,
-                      originX,
-                      originY,
-                      renderW,
-                      renderH,
-                    ),
-                    child: Container(color: Colors.transparent),
+              decoration: BoxDecoration(
+                border: Border.all(color: Colors.brown[800]!, width: 3),
+                borderRadius: BorderRadius.circular(12),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.2),
+                    blurRadius: 8,
+                    offset: const Offset(0, 4),
                   ),
                 ],
+              ),
+              child: Container(
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Stack(
+                  children: [
+                    // NỀN: hiển thị khi _boardReady (nhiều máy vẫn hiện ngay vì cache nhanh)
+                    if (_boardReady)
+                      Positioned(
+                        left: originX,
+                        top: originY,
+                        width: renderW,
+                        height: renderH,
+                        child: SvgPicture.asset(_boardAsset, fit: BoxFit.fill),
+                      )
+                    else
+                      // placeholder mỏng, tránh blank frame
+                      Positioned(
+                        left: originX,
+                        top: originY,
+                        width: renderW,
+                        height: renderH,
+                        child: const SizedBox.shrink(),
+                      ),
+                    // MŨI TÊN: xuất hiện SAU quân + (tuỳ chọn) fade-in
+                    if (_piecesReady &&
+                        widget.arrows.isNotEmpty &&
+                        !state.analyzing)
+                      FadeTransition(
+                        opacity: _fade,
+                        child: CustomPaint(
+                          painter: _ArrowPainter(
+                            arrows: widget.arrows,
+                            cellWidth: cellW,
+                            cellHeight: cellH,
+                            originX: originX,
+                            originY: originY,
+                            isRedAtBottom: state.isRedAtBottom,
+                          ),
+                          child: Container(),
+                        ),
+                      ),
+                    // QUÂN CỜ: chỉ hiển thị khi _piecesReady
+                    if (_piecesReady && widget.showStartPosition)
+                      ..._buildPiecesFromFen(
+                        cellW,
+                        cellH,
+                        state,
+                        originX,
+                        originY,
+                      ),
+
+                    // CHẤM GỢI Ý: sau khi quân sẵn sàng
+                    if (_piecesReady)
+                      ..._buildPossibleMoveIndicators(
+                        state,
+                        cellW,
+                        cellH,
+                        originX,
+                        originY,
+                      ),
+
+                    // ANIMATION DI CHUYỂN QUÂN: cũng nên chờ _piecesReady
+                    if (_piecesReady)
+                      _buildMoveAnimation(
+                        state,
+                        Size(constraints.maxWidth, constraints.maxHeight),
+                        ref,
+                        cellW,
+                        cellH,
+                        originX,
+                        originY,
+                      ),
+                    // Gesture detector for piece interaction
+                    GestureDetector(
+                      onTapDown: (details) => _onBoardTap(
+                        details.localPosition,
+                        state,
+                        controller,
+                        cellW,
+                        cellH,
+                        originX,
+                        originY,
+                        renderW,
+                        renderH,
+                      ),
+                      child: Container(color: Colors.transparent),
+                    ),
+
+                    // Overlay khóa bàn cờ
+                    if (widget.isLocked)
+                      Positioned.fill(
+                        child: Container(
+                          color: Colors.black.withOpacity(0.25),
+                          child: const Center(child: _ChainLock()),
+                        ),
+                      ),
+                  ],
+                ),
               ),
             ),
           );
@@ -762,7 +778,7 @@ Widget _buildSetupPiecesRow(
           padding: const EdgeInsets.symmetric(horizontal: 8),
           child: Draggable<String>(
             data: piece,
-            dragAnchorStrategy: childDragAnchorStrategy,
+            dragAnchorStrategy: pointerDragAnchorStrategy,
             onDragStarted: () {
               print('Draggable onDragStarted: $piece');
             },
@@ -836,16 +852,20 @@ Widget _pieceTile(String piece, bool isSelected, int count, bool canSelect) {
 }
 
 Widget _pieceFeedback(String piece) {
+  const box = 46.0; // đúng với SizedBox(46)
   return Material(
     type: MaterialType.transparency,
-    child: SizedBox(
-      width: 46,
-      height: 46,
-      child: Center(
-        child: SvgPicture.asset(
-          pieceAssetFromSymbol(piece)!,
-          width: 42,
-          height: 42,
+    child: Transform.translate(
+      offset: const Offset(-box / 2, -box / 2), // 👈 kéo tâm về đúng con trỏ
+      child: SizedBox(
+        width: box,
+        height: box,
+        child: Center(
+          child: SvgPicture.asset(
+            pieceAssetFromSymbol(piece)!,
+            width: 42,
+            height: 42,
+          ),
         ),
       ),
     ),
@@ -910,48 +930,7 @@ Widget _buildSetupBoardOverlay(
 
   return Stack(
     children: [
-      // DragTarget: đặt ở trên cùng để nhận kéo thả
-      Positioned.fill(
-        child: IgnorePointer(
-          ignoring: false,
-          child: DragTarget<String>(
-            hitTestBehavior: HitTestBehavior.opaque,
-            builder: (_, __, ___) => Container(
-              color: Colors.transparent,
-              child: const SizedBox.expand(),
-            ),
-            onWillAcceptWithDetails: (DragTargetDetails<String> details) {
-              print('DragTarget onWillAcceptWithDetails: ${details.data}');
-              return true; // Always accept for debugging
-            },
-            onAcceptWithDetails: (DragTargetDetails<String> details) {
-              print(
-                'DragTarget onAcceptWithDetails: ${details.data} at ${details.offset}',
-              );
-              final box =
-                  boardKey.currentContext!.findRenderObject() as RenderBox;
-              final local = box.globalToLocal(details.offset);
-              print('Converted to local: $local');
-              final dx = local.dx.clamp(0.0, boardSize.width - 0.01);
-              final dy = local.dy.clamp(0.0, boardSize.height - 0.01);
-
-              // toạ độ HIỂN THỊ
-              final displayFile = (dx / cellW).floor().clamp(0, 8);
-              final displayRank = (dy / cellH).floor().clamp(0, 9);
-
-              // đổi sang toạ độ BÀN theo hướng
-              final file = displayFile;
-              final rank = isRedAtBottom ? displayRank : 9 - displayRank;
-              print('Calculated file=$file, rank=$rank');
-
-              controller.selectSetupPiece(details.data);
-              controller.placePieceOnBoard(file, rank);
-            },
-          ),
-        ),
-      ),
-
-      // vẽ quân đang có: cũng phải lật theo hướng
+      // 1) Vẽ quân đang có (dưới)
       for (int r = 0; r < 10; r++)
         for (int f = 0; f < 9; f++)
           if (board[r][f].isNotEmpty)
@@ -959,12 +938,35 @@ Widget _buildSetupBoardOverlay(
               left: f * cellW + (cellW - pieceSize) / 2,
               top:
                   (isRedAtBottom ? r : 9 - r) * cellH + (cellH - pieceSize) / 2,
-              child: GestureDetector(
-                onTap: () => controller.removePieceFromBoard(f, r),
-                child: SizedBox(
-                  width: pieceSize,
-                  height: pieceSize,
-                  child: Center(
+              // ✨ Cho quân trên bàn cũng có thể kéo lại
+              child: Draggable<String>(
+                data: board[r][f],
+                dragAnchorStrategy: pointerDragAnchorStrategy,
+                feedback: Material(
+                  type: MaterialType.transparency,
+                  child: Transform.translate(
+                    offset: Offset(
+                      -(pieceSize * 1.2) / 2,
+                      -(pieceSize * 1.2) / 2,
+                    ), // 👈
+                    child: SizedBox(
+                      width: pieceSize * 1.2,
+                      height: pieceSize * 1.2,
+                      child: Center(
+                        child: SvgPicture.asset(
+                          pieceAssetFromSymbol(board[r][f])!,
+                          width: pieceSize * 1.2,
+                          height: pieceSize * 1.2,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                childWhenDragging: Opacity(
+                  opacity: 0.35,
+                  child: SizedBox(
+                    width: pieceSize,
+                    height: pieceSize,
                     child: SvgPicture.asset(
                       pieceAssetFromSymbol(board[r][f])!,
                       width: pieceSize * 0.9,
@@ -972,29 +974,105 @@ Widget _buildSetupBoardOverlay(
                     ),
                   ),
                 ),
+                child: GestureDetector(
+                  onTap: () => controller.removePieceFromBoard(f, r),
+                  child: SizedBox(
+                    width: pieceSize,
+                    height: pieceSize,
+                    child: Center(
+                      child: SvgPicture.asset(
+                        pieceAssetFromSymbol(board[r][f])!,
+                        width: pieceSize * 0.9,
+                        height: pieceSize * 0.9,
+                      ),
+                    ),
+                  ),
+                ),
               ),
             ),
 
-      // Tap để đặt: cũng cần quy đổi display → board
+      // 2) Tap để đặt nhanh (giữ nguyên)
       Positioned.fill(
         child: GestureDetector(
           behavior: HitTestBehavior.opaque,
           onTapDown: (d) {
             final dx = d.localPosition.dx.clamp(0.0, boardSize.width - 0.01);
             final dy = d.localPosition.dy.clamp(0.0, boardSize.height - 0.01);
-
             final displayFile = (dx / cellW).floor().clamp(0, 8);
             final displayRank = (dy / cellH).floor().clamp(0, 9);
-
             final file = displayFile;
             final rank = isRedAtBottom ? displayRank : 9 - displayRank;
-
             if (state.selectedSetupPiece != null) {
+              // Nếu có quân ở ô đích thì xoá trước
+              final bd = FenParser.parseBoard(state.fen);
+              if (bd[rank][file].isNotEmpty) {
+                controller.removePieceFromBoard(file, rank);
+              }
               controller.placePieceOnBoard(file, rank);
             }
           },
         ),
       ),
+
+      // 3) ✨ DragTarget đặt CUỐI CÙNG (trên cùng) - chỉ nhận drag, không nhận tap
+      Positioned.fill(
+        child: DragTarget<String>(
+          hitTestBehavior:
+              HitTestBehavior.translucent, // Thay đổi để không che tap
+          builder: (_, __, ___) => const SizedBox.expand(),
+          onWillAcceptWithDetails: (details) => details.data.isNotEmpty,
+          onAcceptWithDetails: (details) {
+            final box =
+                boardKey.currentContext!.findRenderObject() as RenderBox;
+            final local = box.globalToLocal(details.offset);
+
+            // Bảo vệ
+            if (cellW <= 0 || cellH <= 0) return;
+
+            final dx = local.dx.clamp(0.0, boardSize.width - 0.01);
+            final dy = local.dy.clamp(0.0, boardSize.height - 0.01);
+            final displayFile = (dx / cellW).floor().clamp(0, 8);
+            final displayRank = (dy / cellH).floor().clamp(0, 9);
+            final file = displayFile;
+            final rank = isRedAtBottom ? displayRank : 9 - displayRank;
+
+            // Nếu có quân ở ô đích thì xoá trước
+            final bd = FenParser.parseBoard(state.fen);
+            if (bd[rank][file].isNotEmpty) {
+              controller.removePieceFromBoard(file, rank);
+            }
+
+            controller.selectSetupPiece(details.data);
+            controller.placePieceOnBoard(file, rank);
+          },
+        ),
+      ),
     ],
   );
+}
+
+/// Widget hiển thị icon xích khóa bàn cờ
+class _ChainLock extends StatelessWidget {
+  const _ChainLock();
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: const [
+        Icon(Icons.link, size: 56, color: Colors.white),
+        Icon(Icons.lock, size: 64, color: Colors.white),
+        SizedBox(height: 8),
+        Text(
+          'Bàn cờ đã khóa',
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: 18,
+            fontWeight: FontWeight.bold,
+            shadows: [Shadow(color: Colors.black54, blurRadius: 6)],
+          ),
+        ),
+      ],
+    );
+  }
 }

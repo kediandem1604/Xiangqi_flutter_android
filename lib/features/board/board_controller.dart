@@ -8,6 +8,7 @@ import '../../core/fen.dart';
 import '../../core/logger.dart';
 // Note: dùng trực tiếp PikafishEngine như trước để không ảnh hưởng cách gọi
 import '../../services/game_status_service.dart';
+import '../../widgets/game_notification.dart';
 import '../../services/saved_games_service.dart';
 import '../../models/saved_game.dart';
 
@@ -90,6 +91,7 @@ class BoardState {
   final Offset? arrowFrom;
   final Offset? arrowTo;
   final List<ArrowData> arrows; // all arrows from MultiPV results
+  final bool boardLocked; // khóa bàn cờ khi ván đã kết thúc
   final int? selectedFile;
   final int? selectedRank;
   final List<Offset> possibleMoves; // possible moves for selected piece
@@ -131,6 +133,7 @@ class BoardState {
     this.arrowFrom,
     this.arrowTo,
     this.arrows = const <ArrowData>[],
+    this.boardLocked = false, // khóa bàn cờ khi ván đã kết thúc
     this.selectedFile,
     this.selectedRank,
     this.possibleMoves = const [],
@@ -173,6 +176,7 @@ class BoardState {
     Offset? arrowFrom,
     Offset? arrowTo,
     List<ArrowData>? arrows,
+    bool? boardLocked,
     int? selectedFile,
     int? selectedRank,
     List<Offset>? possibleMoves,
@@ -216,6 +220,7 @@ class BoardState {
       arrowFrom: arrowFrom,
       arrowTo: arrowTo,
       arrows: arrows ?? this.arrows,
+      boardLocked: boardLocked ?? this.boardLocked,
       selectedFile: selectedFile ?? this.selectedFile,
       selectedRank: selectedRank ?? this.selectedRank,
       possibleMoves: possibleMoves ?? this.possibleMoves,
@@ -263,6 +268,12 @@ class BoardController extends StateNotifier<BoardState> {
     AppLogger().log(
       'onBoardTap called: file=$file, rank=$rank, engine=${_engine != null}',
     );
+
+    // NEW: chặn toàn bộ tương tác nếu bàn cờ đã khóa
+    if (state.boardLocked) {
+      AppLogger().log('Board locked - ignoring tap');
+      return;
+    }
 
     if (_engine == null) {
       AppLogger().log('Engine is null, cannot process board tap');
@@ -1321,8 +1332,12 @@ class BoardController extends StateNotifier<BoardState> {
     Color? backgroundColor,
     Duration? duration,
   }) {
-    // This would typically show a snackbar or notification
     AppLogger().log('Notification: $message');
+    GameNotificationCenter.show(
+      message: message,
+      backgroundColor: backgroundColor ?? Colors.red,
+      duration: duration ?? const Duration(seconds: 3),
+    );
   }
 
   Future<void> applyMove(String moveUci) async {
@@ -1467,6 +1482,46 @@ class BoardController extends StateNotifier<BoardState> {
   // Helper method to check if game is from initial position
   bool _isFromStartpos() => state.setupFen == null;
 
+  // Quyết định nhanh khi hết nước → checkmate/stalemate
+  void _decideTerminalByLegalMoves(String fen) {
+    final legalMoves = XiangqiRules.getAllLegalMoves(fen);
+    if (legalMoves.isNotEmpty) return; // còn nước -> không xử lý ở đây
+
+    final inCheck = GameStatusService.isInCheck(fen);
+    final sideToMove = FenParser.getSideToMove(fen); // 'w' or 'b'
+
+    if (inCheck) {
+      // Checkmate
+      final winningPlayer = sideToMove == 'w' ? 'Black' : 'Red';
+      state = state.copyWith(
+        isInCheck: true,
+        isCheckmate: true,
+        isStalemate: false,
+        gameWinner: winningPlayer,
+        boardLocked: true,
+      );
+      _showNotification(
+        '$winningPlayer WINS! Checkmate!',
+        backgroundColor: Colors.green,
+        duration: const Duration(seconds: 5),
+      );
+    } else {
+      // Stalemate
+      state = state.copyWith(
+        isInCheck: false,
+        isCheckmate: false,
+        isStalemate: true,
+        gameWinner: 'Draw',
+        boardLocked: true,
+      );
+      _showNotification(
+        'DRAW! Stalemate!',
+        backgroundColor: Colors.blue,
+        duration: const Duration(seconds: 5),
+      );
+    }
+  }
+
   // Public method for external access
   bool isFromStartpos() => _isFromStartpos();
 
@@ -1478,66 +1533,60 @@ class BoardController extends StateNotifier<BoardState> {
   /// Checks game status when no moves are available (checkmate/stalemate)
   void _checkGameStatusForNoMoves() {
     try {
-      AppLogger().log('=== CHECKING GAME STATUS FOR NO MOVES ===');
+      AppLogger().log('=== CHECKING GAME STATUS FOR NO MOVES (fast rule) ===');
       final fen = state.fen;
 
-      // Kiểm tra chiếu hết trước
+      // Nếu không còn nước, quyết định ngay bằng quy tắc nhanh
+      final legalMoves = XiangqiRules.getAllLegalMoves(fen);
+      if (legalMoves.isEmpty) {
+        _decideTerminalByLegalMoves(fen);
+        return;
+      }
+
+      // Vẫn còn nước -> fallback sang kiểm tra chi tiết (hiếm khi rơi vào)
       final isInCheck = GameStatusService.isInCheck(fen);
       final isCheckmate = GameStatusService.isCheckmate(fen);
       final isStalemate = GameStatusService.isStalemate(fen);
       final winner = GameStatusService.getWinner(fen);
 
-      AppLogger().log(
-        'No moves available - isInCheck: $isInCheck, isCheckmate: $isCheckmate, isStalemate: $isStalemate, winner: $winner',
-      );
-
-      // Cập nhật state
       state = state.copyWith(
         isInCheck: isInCheck,
         isCheckmate: isCheckmate,
         isStalemate: isStalemate,
         gameWinner: winner,
+        boardLocked:
+            isCheckmate || isStalemate || (winner != null && winner != 'Draw'),
       );
 
-      // Hiển thị thông báo phù hợp
       if (isCheckmate) {
         final sideToMove = FenParser.getSideToMove(fen);
         final winningPlayer = sideToMove == 'w' ? 'Black' : 'Red';
-        AppLogger().log('*** CHECKMATE DETECTED - $winningPlayer WINS ***');
         _showNotification(
           '$winningPlayer WINS! Checkmate!',
           backgroundColor: Colors.green,
           duration: const Duration(seconds: 5),
         );
       } else if (isStalemate) {
-        AppLogger().log('*** STALEMATE DETECTED ***');
         _showNotification(
           'DRAW! Stalemate!',
           backgroundColor: Colors.blue,
           duration: const Duration(seconds: 5),
         );
       } else if (winner != null && winner != 'Draw') {
-        AppLogger().log('*** KING CAPTURED - $winner WINS ***');
         _showNotification(
           '$winner WINS! King captured!',
           backgroundColor: Colors.green,
           duration: const Duration(seconds: 5),
         );
       } else {
-        // Trường hợp không xác định được - có thể là lỗi engine
-        AppLogger().log('*** UNKNOWN GAME STATE - No moves available ***');
         _showNotification(
           'Game state unclear - No moves available',
           backgroundColor: Colors.red,
           duration: const Duration(seconds: 3),
         );
       }
-    } catch (e, stackTrace) {
-      AppLogger().error(
-        'Error checking game status for no moves',
-        e,
-        stackTrace,
-      );
+    } catch (e, st) {
+      AppLogger().error('Error checking game status for no moves', e, st);
     }
   }
 
@@ -1547,6 +1596,13 @@ class BoardController extends StateNotifier<BoardState> {
       AppLogger().log('=== CHECKING GAME STATUS ===');
       final fen = state.fen;
       AppLogger().log('Current FEN: $fen');
+
+      // Fallback nhanh: nếu không còn nước, quyết định ngay (tránh miss của service)
+      final legalMovesQuick = XiangqiRules.getAllLegalMoves(fen);
+      if (legalMovesQuick.isEmpty) {
+        _decideTerminalByLegalMoves(fen);
+        return;
+      }
 
       // Check for check FIRST
       AppLogger().log('Checking for check...');
@@ -1573,6 +1629,8 @@ class BoardController extends StateNotifier<BoardState> {
         isCheckmate: isCheckmate,
         isStalemate: isStalemate,
         gameWinner: winner,
+        boardLocked:
+            isCheckmate || isStalemate || (winner != null && winner != 'Draw'),
       );
 
       // Handle checkmate (highest priority)
@@ -1925,6 +1983,7 @@ class BoardController extends StateNotifier<BoardState> {
       vsEngineDifficulty: null,
       isEngineThinking: false,
       multiPv: 1, // QUAN TRỌNG: cập nhật state.multiPv
+      boardLocked: false, // Mở khóa khi thoát chế độ đánh với máy
     );
 
     AppLogger().log('Stopped vs engine mode - MultiPV reset to 1');
@@ -1973,6 +2032,11 @@ class BoardController extends StateNotifier<BoardState> {
         canBack: game.moves.isNotEmpty,
         canNext: false,
         gameWinner: game.winner,
+        arrows: const <ArrowData>[], // Xóa mũi tên khi load game
+        bestLines: const [], // Xóa phân tích cũ
+        selectedFile: null, // Xóa lựa chọn quân
+        selectedRank: null,
+        possibleMoves: const [], // Xóa nước đi có thể
       );
 
       AppLogger().log('Game loaded: ${game.name}');
@@ -2423,6 +2487,7 @@ class BoardController extends StateNotifier<BoardState> {
       pointer: 0,
       setupFen: state.fen, // Save setup FEN as starting position
       bestLines: const [], // Clear any previous analysis arrows
+      boardLocked: false, // Mở khóa khi bắt đầu game từ setup
     );
 
     // Reset engine to ensure clean state

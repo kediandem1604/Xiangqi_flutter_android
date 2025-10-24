@@ -230,7 +230,189 @@ class XiangqiRules {
         // Black palace: ranks 0-2, files 3-5
         if (toRank < 0 || toRank > 2 || toFile < 3 || toFile > 5) return false;
       }
+
+      // Kiểm tra các ràng buộc bổ sung cho tướng
+      if (!_isKingMoveSafe(board, fromFile, fromRank, toFile, toRank)) {
+        return false;
+      }
+
       return true;
+    }
+
+    return false;
+  }
+
+  /// Kiểm tra nước đi của tướng có an toàn không
+  static bool _isKingMoveSafe(
+    List<List<String>> board,
+    int fromFile,
+    int fromRank,
+    int toFile,
+    int toRank,
+  ) {
+    // 1. Kiểm tra tướng không thể chạm mặt với tướng/xe địch
+    if (_isKingFacingEnemyKingOrRook(board, toFile, toRank)) {
+      return false;
+    }
+
+    // 2. Kiểm tra tướng không đi vào điểm ăn của mã địch
+    if (_isKingAttackedByHorse(board, toFile, toRank)) {
+      return false;
+    }
+
+    // 3. Kiểm tra tướng không đi vào điểm ăn của tốt địch
+    if (_isKingAttackedByPawn(board, toFile, toRank)) {
+      return false;
+    }
+
+    // 4. Kiểm tra tướng không đi vào điểm ăn của pháo địch
+    if (_isKingAttackedByCannon(board, toFile, toRank)) {
+      return false;
+    }
+
+    return true;
+  }
+
+  /// Kiểm tra tướng có chạm mặt với tướng/xe địch không
+  static bool _isKingFacingEnemyKingOrRook(
+    List<List<String>> board,
+    int kingFile,
+    int kingRank,
+  ) {
+    // Lấy thông tin về tướng hiện tại để xác định màu
+    final kingPiece = board[kingRank][kingFile];
+    if (kingPiece.isEmpty) return false;
+
+    final isRedKing = kingPiece == kingPiece.toUpperCase();
+
+    // Kiểm tra theo chiều dọc (cùng file)
+    for (int rank = 0; rank < 10; rank++) {
+      if (rank == kingRank) continue;
+
+      final piece = board[rank][kingFile];
+      if (piece.isEmpty) continue;
+
+      final isRedPiece = piece == piece.toUpperCase();
+      if (isRedPiece == isRedKing) continue; // Cùng màu, bỏ qua
+
+      // Kiểm tra có phải tướng hoặc xe không
+      final pieceType = piece.toLowerCase();
+      if (pieceType == 'k' || pieceType == 'r') {
+        // Kiểm tra đường đi có bị chặn không
+        bool pathBlocked = false;
+        final start = min(kingRank, rank);
+        final end = max(kingRank, rank);
+
+        for (int r = start + 1; r < end; r++) {
+          if (board[r][kingFile].isNotEmpty) {
+            pathBlocked = true;
+            break;
+          }
+        }
+
+        if (!pathBlocked) {
+          return true; // Chạm mặt với tướng/xe địch
+        }
+      }
+    }
+
+    return false;
+  }
+
+  /// Kiểm tra tướng có bị mã địch tấn công không
+  static bool _isKingAttackedByHorse(
+    List<List<String>> board,
+    int kingFile,
+    int kingRank,
+  ) {
+    // Lấy thông tin về tướng hiện tại để xác định màu
+    final kingPiece = board[kingRank][kingFile];
+    if (kingPiece.isEmpty) return false;
+
+    final isRedKing = kingPiece == kingPiece.toUpperCase();
+
+    // Kiểm tra tất cả mã trên bàn cờ
+    for (int rank = 0; rank < 10; rank++) {
+      for (int file = 0; file < 9; file++) {
+        final piece = board[rank][file];
+        if (piece.isEmpty) continue;
+
+        final isRedPiece = piece == piece.toUpperCase();
+        if (isRedPiece == isRedKing) continue; // Cùng màu, bỏ qua
+
+        if (piece.toLowerCase() == 'h') {
+          // Kiểm tra mã có thể ăn tướng không
+          if (_isValidHorseMove(board, file, rank, kingFile, kingRank)) {
+            return true;
+          }
+        }
+      }
+    }
+
+    return false;
+  }
+
+  /// Kiểm tra tướng có bị tốt địch tấn công không
+  static bool _isKingAttackedByPawn(
+    List<List<String>> board,
+    int kingFile,
+    int kingRank,
+  ) {
+    // Lấy thông tin về tướng hiện tại để xác định màu
+    final kingPiece = board[kingRank][kingFile];
+    if (kingPiece.isEmpty) return false;
+
+    final isRedKing = kingPiece == kingPiece.toUpperCase();
+
+    // Kiểm tra tất cả tốt trên bàn cờ
+    for (int rank = 0; rank < 10; rank++) {
+      for (int file = 0; file < 9; file++) {
+        final piece = board[rank][file];
+        if (piece.isEmpty) continue;
+
+        final isRedPiece = piece == piece.toUpperCase();
+        if (isRedPiece == isRedKing) continue; // Cùng màu, bỏ qua
+
+        if (piece.toLowerCase() == 'p') {
+          // Kiểm tra tốt có thể ăn tướng không
+          if (_isValidPawnMove(board, file, rank, kingFile, kingRank)) {
+            return true;
+          }
+        }
+      }
+    }
+
+    return false;
+  }
+
+  /// Kiểm tra tướng có bị pháo địch tấn công không
+  static bool _isKingAttackedByCannon(
+    List<List<String>> board,
+    int kingFile,
+    int kingRank,
+  ) {
+    // Lấy thông tin về tướng hiện tại để xác định màu
+    final kingPiece = board[kingRank][kingFile];
+    if (kingPiece.isEmpty) return false;
+
+    final isRedKing = kingPiece == kingPiece.toUpperCase();
+
+    // Kiểm tra tất cả pháo trên bàn cờ
+    for (int rank = 0; rank < 10; rank++) {
+      for (int file = 0; file < 9; file++) {
+        final piece = board[rank][file];
+        if (piece.isEmpty) continue;
+
+        final isRedPiece = piece == piece.toUpperCase();
+        if (isRedPiece == isRedKing) continue; // Cùng màu, bỏ qua
+
+        if (piece.toLowerCase() == 'c') {
+          // Kiểm tra pháo có thể ăn tướng không
+          if (_isValidCannonMove(board, file, rank, kingFile, kingRank)) {
+            return true;
+          }
+        }
+      }
     }
 
     return false;

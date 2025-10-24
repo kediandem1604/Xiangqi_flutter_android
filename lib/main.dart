@@ -373,8 +373,19 @@ class _XiangqiHomePageState extends ConsumerState<XiangqiHomePage> {
                     return Center(
                       child: SizedBox(
                         width: MediaQuery.of(context).size.width * 0.9,
-                        child: BoardView(
-                          arrows: _showBestMoves ? st.arrows : const [],
+                        child: Stack(
+                          children: [
+                            BoardView(
+                              arrows: _showBestMoves ? st.arrows : const [],
+                              isLocked: st.boardLocked,
+                            ),
+
+                            // XÍCH PHỦ BÀN CỜ KHI BỊ KHÓA
+                            if (st.boardLocked)
+                              const Positioned.fill(
+                                child: _LockChainsOverlay(),
+                              ),
+                          ],
                         ),
                       ),
                     );
@@ -433,7 +444,35 @@ class _XiangqiHomePageState extends ConsumerState<XiangqiHomePage> {
                                   ref.read(depthProvider.notifier).state = 8;
                                 });
                               },
-                              child: const Text('Reset'),
+                              style: OutlinedButton.styleFrom(
+                                backgroundColor: st.boardLocked
+                                    ? const Color(0xFFFFE082)
+                                    : null,
+                                side: st.boardLocked
+                                    ? const BorderSide(
+                                        color: Color(0xFFFFA000),
+                                        width: 2,
+                                      )
+                                    : null,
+                                foregroundColor: st.boardLocked
+                                    ? Colors.brown[800]
+                                    : null,
+                                elevation: st.boardLocked ? 2 : 0,
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 20,
+                                  vertical: 12,
+                                ),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  if (st.boardLocked) ...[
+                                    const Icon(Icons.refresh),
+                                    const SizedBox(width: 6),
+                                  ],
+                                  const Text('Reset'),
+                                ],
+                              ),
                             ),
                             OutlinedButton(
                               onPressed: st.canNext ? ctrl.next : null,
@@ -766,4 +805,110 @@ class _XiangqiHomePageState extends ConsumerState<XiangqiHomePage> {
       endIndent: 16,
     );
   }
+}
+
+class _LockChainsOverlay extends StatefulWidget {
+  const _LockChainsOverlay();
+
+  @override
+  State<_LockChainsOverlay> createState() => _LockChainsOverlayState();
+}
+
+class _LockChainsOverlayState extends State<_LockChainsOverlay>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ac;
+  late final Animation<double> _fade;
+
+  @override
+  void initState() {
+    super.initState();
+    _ac = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 300),
+    );
+    _fade = CurvedAnimation(parent: _ac, curve: Curves.easeOut);
+    _ac.forward();
+  }
+
+  @override
+  void dispose() {
+    _ac.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FadeTransition(
+      opacity: _fade,
+      child: AbsorbPointer(
+        // chặn tương tác
+        child: Stack(
+          children: [
+            // Lớp mờ
+            Container(color: Colors.black.withOpacity(0.25)),
+
+            // Hai dây xích chéo + ổ khóa giữa
+            Positioned.fill(child: CustomPaint(painter: _ChainsPainter())),
+
+            // Ổ khóa to giữa
+            Center(
+              child: Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.black.withOpacity(0.35),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(Icons.lock, size: 56, color: Colors.white),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ChainsPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = const Color(0xFFB0B0B0)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 10
+      ..strokeCap = StrokeCap.round;
+
+    // Hai đường chéo như dây xích
+    final path1 = Path()
+      ..moveTo(-size.width * 0.1, size.height * 0.1)
+      ..lineTo(size.width * 1.1, size.height * 0.9);
+
+    final path2 = Path()
+      ..moveTo(size.width * 1.1, size.height * 0.1)
+      ..lineTo(-size.width * 0.1, size.height * 0.9);
+
+    // Vẽ "mắt xích": các đoạn ngắn đứt quãng cho cảm giác xích
+    _drawChain(canvas, path1, paint);
+    _drawChain(canvas, path2, paint);
+  }
+
+  void _drawChain(Canvas canvas, Path path, Paint paint) {
+    final metrics = path.computeMetrics().first;
+    const linkLen = 32.0;
+    const gap = 12.0;
+    double dist = 0;
+
+    bool flip = false;
+    while (dist < metrics.length) {
+      final seg = metrics.extractPath(
+        dist,
+        (dist + linkLen).clamp(0, metrics.length),
+      );
+      canvas.drawPath(seg, paint..strokeWidth = flip ? 9 : 10);
+      dist += linkLen + gap;
+      flip = !flip;
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }

@@ -1,4 +1,28 @@
 import 'package:flutter/material.dart';
+import 'dart:async';
+
+// ===== Simple notification bus (global) =====
+class GameNotificationCenter {
+  static final _controller = StreamController<GameNotification>.broadcast();
+
+  static void show({
+    required String message,
+    Color backgroundColor = Colors.red,
+    Color textColor = Colors.white,
+    Duration duration = const Duration(seconds: 3),
+  }) {
+    _controller.add(
+      GameNotification(
+        message: message,
+        backgroundColor: backgroundColor,
+        textColor: textColor,
+        duration: duration,
+      ),
+    );
+  }
+
+  static Stream<GameNotification> get stream => _controller.stream;
+}
 
 /// Widget for displaying game notifications (check, checkmate, etc.)
 class GameNotification extends StatefulWidget {
@@ -30,31 +54,23 @@ class _GameNotificationState extends State<GameNotification>
   @override
   void initState() {
     super.initState();
-    
+
     _animationController = AnimationController(
       duration: const Duration(milliseconds: 300),
       vsync: this,
     );
-    
-    _slideAnimation = Tween<double>(
-      begin: -1.0,
-      end: 0.0,
-    ).animate(CurvedAnimation(
-      parent: _animationController,
-      curve: Curves.easeOut,
-    ));
-    
-    _fadeAnimation = Tween<double>(
-      begin: 0.0,
-      end: 1.0,
-    ).animate(CurvedAnimation(
-      parent: _animationController,
-      curve: Curves.easeOut,
-    ));
-    
+
+    _slideAnimation = Tween<double>(begin: -1.0, end: 0.0).animate(
+      CurvedAnimation(parent: _animationController, curve: Curves.easeOut),
+    );
+
+    _fadeAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
+      CurvedAnimation(parent: _animationController, curve: Curves.easeOut),
+    );
+
     // Start animation
     _animationController.forward();
-    
+
     // Auto dismiss after duration
     Future.delayed(widget.duration, () {
       if (mounted) {
@@ -88,10 +104,7 @@ class _GameNotificationState extends State<GameNotification>
             opacity: _fadeAnimation.value,
             child: Container(
               margin: const EdgeInsets.all(16),
-              padding: const EdgeInsets.symmetric(
-                horizontal: 24,
-                vertical: 16,
-              ),
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
               decoration: BoxDecoration(
                 color: widget.backgroundColor,
                 borderRadius: BorderRadius.circular(12),
@@ -106,11 +119,7 @@ class _GameNotificationState extends State<GameNotification>
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(
-                    _getIcon(),
-                    color: widget.textColor,
-                    size: 24,
-                  ),
+                  Icon(_getIcon(), color: widget.textColor, size: 24),
                   const SizedBox(width: 12),
                   Flexible(
                     child: Text(
@@ -125,11 +134,7 @@ class _GameNotificationState extends State<GameNotification>
                   const SizedBox(width: 12),
                   GestureDetector(
                     onTap: _dismiss,
-                    child: Icon(
-                      Icons.close,
-                      color: widget.textColor,
-                      size: 20,
-                    ),
+                    child: Icon(Icons.close, color: widget.textColor, size: 20),
                   ),
                 ],
               ),
@@ -166,22 +171,32 @@ class GameNotificationOverlay extends StatefulWidget {
   });
 
   @override
-  State<GameNotificationOverlay> createState() => _GameNotificationOverlayState();
+  State<GameNotificationOverlay> createState() =>
+      _GameNotificationOverlayState();
 }
 
 class _GameNotificationOverlayState extends State<GameNotificationOverlay> {
   final List<GameNotification> _notifications = [];
+  StreamSubscription<GameNotification>? _sub;
+
+  @override
+  void initState() {
+    super.initState();
+    _sub = GameNotificationCenter.stream.listen(addNotification);
+  }
+
+  @override
+  void dispose() {
+    _sub?.cancel();
+    super.dispose();
+  }
 
   void addNotification(GameNotification notification) {
-    setState(() {
-      _notifications.add(notification);
-    });
+    setState(() => _notifications.add(notification));
   }
 
   void removeNotification(GameNotification notification) {
-    setState(() {
-      _notifications.remove(notification);
-    });
+    setState(() => _notifications.remove(notification));
   }
 
   @override
@@ -189,18 +204,20 @@ class _GameNotificationOverlayState extends State<GameNotificationOverlay> {
     return Stack(
       children: [
         widget.child,
-        ..._notifications.map((notification) => Positioned(
-          top: 0,
-          left: 0,
-          right: 0,
-          child: GameNotification(
-            message: notification.message,
-            backgroundColor: notification.backgroundColor,
-            textColor: notification.textColor,
-            duration: notification.duration,
-            onDismiss: () => removeNotification(notification),
+        ..._notifications.map(
+          (notification) => Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            child: GameNotification(
+              message: notification.message,
+              backgroundColor: notification.backgroundColor,
+              textColor: notification.textColor,
+              duration: notification.duration,
+              onDismiss: () => removeNotification(notification),
+            ),
           ),
-        )),
+        ),
       ],
     );
   }
