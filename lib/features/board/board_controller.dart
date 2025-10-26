@@ -2367,6 +2367,154 @@ class BoardController extends StateNotifier<BoardState> {
     }
   }
 
+  /// Validate if a piece can be placed at the given position
+  bool _isValidPlacementPosition(String piece, int file, int rank) {
+    final pieceType = piece.toLowerCase();
+    final isRedPiece = piece == piece.toUpperCase();
+
+    // ✅ Tướng (King): chỉ được trong cung (palace), đi ngang/dọc trong cung
+    if (pieceType == 'k') {
+      if (isRedPiece) {
+        // Red King: file 3-5, rank 7-9 (9 ô trong cung)
+        if (rank < 7 || rank > 9 || file < 3 || file > 5) {
+          return false;
+        }
+      } else {
+        // Black King: file 3-5, rank 0-2 (9 ô trong cung)
+        if (rank > 2 || file < 3 || file > 5) {
+          return false;
+        }
+      }
+      return true;
+    }
+
+    // ✅ Sĩ (Advisor): chỉ được đặt ở 5 ô chéo trong cung (trung tâm + 4 ô chéo)
+    // Cung là 3x3: file 3-5, rank 0-2 (đen) hoặc rank 7-9 (đỏ)
+    // 5 vị trí hợp lệ: (3,0), (3,2), (4,1), (5,0), (5,2) và vị trí trung tâm
+    // Đen: (3,0), (3,2), (4,1), (5,0), (5,2)
+    // Đỏ: (3,7), (3,9), (4,8), (5,7), (5,9)
+    if (pieceType == 'a') {
+      if (isRedPiece) {
+        // Red Advisor phải ở cung và phải là vị trí chéo
+        if (rank < 7 || rank > 9 || file < 3 || file > 5) {
+          return false;
+        }
+        // Kiểm tra vị trí chéo: (3,7), (3,9), (4,8), (5,7), (5,9)
+        if ((file == 3 && rank == 7) ||
+            (file == 3 && rank == 9) ||
+            (file == 4 && rank == 8) ||
+            (file == 5 && rank == 7) ||
+            (file == 5 && rank == 9)) {
+          return true;
+        }
+        return false;
+      } else {
+        // Black Advisor phải ở cung và phải là vị trí chéo
+        if (rank > 2 || file < 3 || file > 5) {
+          return false;
+        }
+        // Kiểm tra vị trí chéo: (3,0), (3,2), (4,1), (5,0), (5,2)
+        if ((file == 3 && rank == 0) ||
+            (file == 3 && rank == 2) ||
+            (file == 4 && rank == 1) ||
+            (file == 5 && rank == 0) ||
+            (file == 5 && rank == 2)) {
+          return true;
+        }
+        return false;
+      }
+    }
+
+    // ✅ Tượng (Elephant) – đúng 7 vị trí mỗi bên
+    // Tượng chỉ có thể đứng ở các "mắt tượng" (vị trí chéo đặc biệt)
+    if (pieceType == 'e') {
+      // 7 ô hợp lệ cho ĐEN (nửa trên, ranks 0..4)
+      const blackElephantSpots = <(int, int)>{
+        (2, 0),
+        (6, 0),
+        (0, 2),
+        (4, 2),
+        (8, 2),
+        (2, 4),
+        (6, 4),
+      };
+
+      // 7 ô hợp lệ cho ĐỎ (nửa dưới, ranks 5..9)
+      const redElephantSpots = <(int, int)>{
+        (2, 9),
+        (6, 9),
+        (0, 7),
+        (4, 7),
+        (8, 7),
+        (2, 5),
+        (6, 5),
+      };
+
+      final ok = isRedPiece
+          ? redElephantSpots.contains((file, rank))
+          : blackElephantSpots.contains((file, rank));
+      return ok;
+    }
+
+    // ✅ Tốt (Pawn)
+    // - Bên mình (chưa qua sông):
+    //   * Đỏ: rank 6 và rank 5, chỉ files 0,2,4,6,8 (5 + 5 ô)
+    //   * Đen: rank 3 và rank 4, chỉ files 0,2,4,6,8 (5 + 5 ô)
+    // - Bên kia (đã qua sông): bất kỳ ô nào nửa bàn đối diện
+    if (pieceType == 'p') {
+      const evenFiles = <int>{0, 2, 4, 6, 8};
+
+      if (isRedPiece) {
+        // Bên kia sông của Đỏ: ranks 0..4 → đặt tự do
+        if (rank <= 4) return true;
+
+        // Chưa qua sông của Đỏ: chỉ 2 hàng 6 và 5, file chẵn
+        if ((rank == 6 || rank == 5) && evenFiles.contains(file)) {
+          return true;
+        }
+
+        return false;
+      } else {
+        // Bên kia sông của Đen: ranks 5..9 → đặt tự do
+        if (rank >= 5) return true;
+
+        // Chưa qua sông của Đen: chỉ 2 hàng 3 và 4, file chẵn
+        if ((rank == 3 || rank == 4) && evenFiles.contains(file)) {
+          return true;
+        }
+
+        return false;
+      }
+    }
+
+    // ✅ Các quân khác (Xe, Pháo, Mã): có thể đặt bất kỳ đâu (trừ cung và quân đối phương)
+    return true;
+  }
+
+  String _getPieceTypeName(String piece) {
+    final pieceType = piece.toLowerCase();
+    final isRedPiece = piece == piece.toUpperCase();
+    final color = isRedPiece ? 'Red' : 'Black';
+    switch (pieceType) {
+      case 'r':
+        return '$color Chariot';
+      case 'h':
+        return '$color Horse';
+      case 'e':
+        return '$color Elephant';
+      case 'a':
+        return '$color Advisor';
+      case 'k':
+        return '$color King';
+      case 'c':
+        return '$color Cannon';
+      case 'p':
+        return '$color Pawn';
+      default:
+        return '$color Piece';
+    }
+  }
+
   void placePieceOnBoard(int file, int rank) {
     if (!state.isSetupMode || state.selectedSetupPiece == null) return;
 
@@ -2383,6 +2531,18 @@ class BoardController extends StateNotifier<BoardState> {
     final availableCount = state.setupPieces[piece] ?? 0;
     if (availableCount <= 0) {
       AppLogger().log('No more $piece pieces available to place');
+      return;
+    }
+
+    // ✅ Kiểm tra vị trí đặt có hợp lệ không
+    if (!_isValidPlacementPosition(piece, file, rank)) {
+      final pieceName = _getPieceTypeName(piece);
+      _showNotification(
+        'Cannot place $pieceName at this position! Invalid placement.',
+        backgroundColor: Colors.red,
+        duration: const Duration(seconds: 3),
+      );
+      AppLogger().log('Invalid placement: $piece at ($file, $rank)');
       return;
     }
 
@@ -2451,6 +2611,64 @@ class BoardController extends StateNotifier<BoardState> {
     state = state.copyWith(
       fen: newFen,
       setupPieces: newSetupPieces,
+      setupMoveHistory: newHistory,
+      setupMoveHistoryPointer: newHistory.length - 1,
+    );
+  }
+
+  /// Move a piece from one square to another on the board (without affecting setupPieces count)
+  void movePieceOnBoard(int fromFile, int fromRank, int toFile, int toRank) {
+    if (!state.isSetupMode) return;
+
+    final board = FenParser.parseBoard(state.fen);
+    final piece = board[fromRank][fromFile];
+
+    if (piece.isEmpty) return;
+
+    // ✅ Kiểm tra vị trí mới có hợp lệ không
+    if (!_isValidPlacementPosition(piece, toFile, toRank)) {
+      final pieceName = _getPieceTypeName(piece);
+      _showNotification(
+        'Cannot move $pieceName to this position! Invalid placement.',
+        backgroundColor: Colors.red,
+        duration: const Duration(seconds: 3),
+      );
+      AppLogger().log(
+        'Invalid move: $piece from ($fromFile, $fromRank) to ($toFile, $toRank)',
+      );
+      return;
+    }
+
+    // If destination has a piece, remove it first (return to setupPieces)
+    if (board[toRank][toFile].isNotEmpty) {
+      final removedPiece = board[toRank][toFile];
+      final newSetupPieces = Map<String, int>.from(state.setupPieces);
+      newSetupPieces[removedPiece] = (newSetupPieces[removedPiece] ?? 0) + 1;
+      state = state.copyWith(setupPieces: newSetupPieces);
+    }
+
+    // Perform the move
+    board[fromRank][fromFile] = '';
+    board[toRank][toFile] = piece;
+
+    final newFen = FenParser.boardToFen(board, state.redToMove ? 'w' : 'b');
+
+    AppLogger().log(
+      'Moved $piece from ($fromFile, $fromRank) to ($toFile, $toRank)',
+    );
+
+    // Update setup move history (lightweight, no setupPieces change)
+    final newHistory = List<String>.from(state.setupMoveHistory);
+    if (state.setupMoveHistoryPointer < newHistory.length - 1) {
+      newHistory.removeRange(
+        state.setupMoveHistoryPointer + 1,
+        newHistory.length,
+      );
+    }
+    newHistory.add(newFen);
+
+    state = state.copyWith(
+      fen: newFen,
       setupMoveHistory: newHistory,
       setupMoveHistoryPointer: newHistory.length - 1,
     );

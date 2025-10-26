@@ -5,6 +5,28 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'board_controller.dart';
 import '../../core/fen.dart';
 
+// Payload cho drag & drop trong setup mode
+class DragData {
+  final String piece; // Ký tự quân: 'P', 'R', ...
+  final bool fromBoard; // true nếu kéo từ trên bàn
+  final int? fromFile; // Tọa độ nguồn khi fromBoard=true
+  final int? fromRank;
+
+  const DragData({
+    required this.piece,
+    required this.fromBoard,
+    this.fromFile,
+    this.fromRank,
+  });
+}
+
+// Constants cho khay setup (2 hàng)
+const double kTileSize = 52.0; // Kích thước tile (để 2 hàng vừa ~112px)
+const double kTileGapH = 10.0; // Khoảng cách ngang giữa các tile
+const double kTileGapV = 8.0; // Khoảng cách dọc giữa 2 hàng
+const double kTrayHeight = kTileSize * 2 + kTileGapV; // = 112px
+const double kFeedbackSize = 58.0; // Kích thước khi kéo (chỉ to hơn một xíu)
+
 // Hàm chung để tránh lệch map giữa quân tĩnh và animation
 String? pieceAssetFromSymbol(String s) {
   switch (s) {
@@ -653,45 +675,14 @@ Widget _buildSetupModeUI(BoardState state, BoardController controller) {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           mainAxisSize: MainAxisSize.min,
           children: [
-            // Header controls - chỉ có Start Game và Exit Setup
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              decoration: BoxDecoration(
-                color: Colors.blue[50],
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                children: [
-                  ElevatedButton(
-                    onPressed: controller.startGameFromSetup,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.green[100],
-                      foregroundColor: Colors.green[800],
-                    ),
-                    child: const Text('Start Game'),
-                  ),
-                  ElevatedButton(
-                    onPressed: controller.exitSetupMode,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.red[100],
-                      foregroundColor: Colors.red[800],
-                    ),
-                    child: const Text('Exit Setup'),
-                  ),
-                ],
-              ),
-            ),
-
-            const SizedBox(height: 16),
-
             // Hàng TRÊN: nếu red ở dưới thì trên là đen; nếu black ở dưới thì trên là đỏ
             SizedBox(
-              height: 100,
-              child: _buildSetupPiecesRow(
+              height: kTrayHeight,
+              child: _buildSetupPiecesTray(
                 state,
                 controller,
                 !state.isRedAtBottom, // isRed cho hàng TRÊN
+                isTopTray: true, // 4 quân trên, 3 quân dưới
               ),
             ),
 
@@ -712,19 +703,20 @@ Widget _buildSetupModeUI(BoardState state, BoardController controller) {
 
             // Hàng DƯỚI: bên đang ở dưới bàn
             SizedBox(
-              height: 100,
-              child: _buildSetupPiecesRow(
+              height: kTrayHeight,
+              child: _buildSetupPiecesTray(
                 state,
                 controller,
                 state.isRedAtBottom, // isRed cho hàng DƯỚI
+                isTopTray: false, // 3 quân trên, 4 quân dưới (đối xứng)
               ),
             ),
 
             const SizedBox(height: 16),
 
-            // Controls: Back, Reset, Next
+            // Controls: Back, Reset, Next, Start Game
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
               decoration: BoxDecoration(
                 color: Colors.grey[100],
                 borderRadius: BorderRadius.circular(8),
@@ -732,25 +724,49 @@ Widget _buildSetupModeUI(BoardState state, BoardController controller) {
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                 children: [
-                  ElevatedButton(
-                    onPressed: controller.canUndoSetupMove()
-                        ? controller.undoSetupMove
-                        : null,
-                    child: const Text('Back'),
-                  ),
-                  ElevatedButton(
-                    onPressed: controller.resetSetupBoard,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.orange[100],
-                      foregroundColor: Colors.orange[800],
+                  Flexible(
+                    child: ElevatedButton(
+                      onPressed: controller.canUndoSetupMove()
+                          ? controller.undoSetupMove
+                          : null,
+                      style: ElevatedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(horizontal: 12),
+                      ),
+                      child: const Text('Back'),
                     ),
-                    child: const Text('Reset'),
                   ),
-                  ElevatedButton(
-                    onPressed: controller.canRedoSetupMove()
-                        ? controller.redoSetupMove
-                        : null,
-                    child: const Text('Next'),
+                  Flexible(
+                    child: ElevatedButton(
+                      onPressed: controller.resetSetupBoard,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.orange[100],
+                        foregroundColor: Colors.orange[800],
+                        padding: const EdgeInsets.symmetric(horizontal: 12),
+                      ),
+                      child: const Text('Reset'),
+                    ),
+                  ),
+                  Flexible(
+                    child: ElevatedButton(
+                      onPressed: controller.canRedoSetupMove()
+                          ? controller.redoSetupMove
+                          : null,
+                      style: ElevatedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(horizontal: 12),
+                      ),
+                      child: const Text('Next'),
+                    ),
+                  ),
+                  Flexible(
+                    child: ElevatedButton(
+                      onPressed: controller.startGameFromSetup,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.green[100],
+                        foregroundColor: Colors.green[800],
+                        padding: const EdgeInsets.symmetric(horizontal: 12),
+                      ),
+                      child: const Text('Start Game'),
+                    ),
                   ),
                 ],
               ),
@@ -762,58 +778,123 @@ Widget _buildSetupModeUI(BoardState state, BoardController controller) {
   );
 }
 
-Widget _buildSetupPiecesRow(
+// Bố cục 2 hàng: thanh trên 4-3, thanh dưới 3-4
+Widget _buildSetupPiecesTray(
   BoardState state,
   BoardController controller,
-  bool isRed,
-) {
+  bool isRed, {
+  required bool isTopTray,
+}) {
   final pieces = isRed
       ? ['R', 'H', 'E', 'A', 'K', 'C', 'P']
       : ['r', 'h', 'e', 'a', 'k', 'c', 'p'];
 
-  return SingleChildScrollView(
-    scrollDirection: Axis.horizontal,
-    child: Row(
-      children: pieces.map((piece) {
-        final count = state.setupPieces[piece] ?? 0;
-        final isSelected = state.selectedSetupPiece == piece;
-        final canSelect = count > 0;
+  final upperCount = isTopTray ? 4 : 3;
+  final lowerCount = pieces.length - upperCount;
+  final upperPieces = pieces.take(upperCount).toList();
+  final lowerPieces = pieces.skip(upperCount).take(lowerCount).toList();
 
-        return Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 8),
-          child: Draggable<String>(
-            data: piece,
-            dragAnchorStrategy: pointerDragAnchorStrategy,
-            onDragStarted: () {
-              print('Draggable onDragStarted: $piece');
-            },
-            onDragEnd: (details) {
-              print(
-                'Draggable onDragEnd: $piece, wasAccepted: ${details.wasAccepted}',
-              );
-            },
-            feedback: _pieceFeedback(piece),
-            childWhenDragging: Opacity(
-              opacity: 0.35,
-              child: _pieceTile(piece, isSelected, count, canSelect),
-            ),
-            child: GestureDetector(
-              onTap: canSelect
-                  ? () => controller.selectSetupPiece(piece)
-                  : null,
-              child: _pieceTile(piece, isSelected, count, canSelect),
+  double _rowWidth(int n) {
+    if (n <= 0) return 0;
+    return n * kTileSize + (n - 1) * kTileGapH;
+  }
+
+  Widget _tile(String piece) {
+    final count = state.setupPieces[piece] ?? 0;
+    final isSelected = state.selectedSetupPiece == piece;
+    final canSelect = count > 0;
+
+    return Padding(
+      padding: const EdgeInsets.only(right: kTileGapH),
+      child: Draggable<DragData>(
+        data: DragData(piece: piece, fromBoard: false),
+        dragAnchorStrategy: pointerDragAnchorStrategy,
+        feedback: Material(
+          type: MaterialType.transparency,
+          child: Transform.translate(
+            offset: const Offset(-kFeedbackSize / 2, -kFeedbackSize / 2),
+            child: SizedBox(
+              width: kFeedbackSize,
+              height: kFeedbackSize,
+              child: Center(
+                child: SvgPicture.asset(
+                  pieceAssetFromSymbol(piece)!,
+                  width: kFeedbackSize * 0.9,
+                  height: kFeedbackSize * 0.9,
+                ),
+              ),
             ),
           ),
-        );
-      }).toList(),
-    ),
+        ),
+        childWhenDragging: Opacity(
+          opacity: 0.35,
+          child: _pieceTileSized(piece, isSelected, count, canSelect),
+        ),
+        child: GestureDetector(
+          onTap: canSelect ? () => controller.selectSetupPiece(piece) : null,
+          child: _pieceTileSized(piece, isSelected, count, canSelect),
+        ),
+      ),
+    );
+  }
+
+  return LayoutBuilder(
+    builder: (context, constraints) {
+      // độ rộng thực sự của 2 hàng (lấy hàng rộng hơn)
+      final contentRowW = max(
+        _rowWidth(upperPieces.length),
+        _rowWidth(lowerPieces.length),
+      );
+      // padding hai bên của khay
+      const double horizontalPad = 16.0;
+      final contentW = contentRowW + horizontalPad;
+
+      return SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: SizedBox(
+          // nếu content nhỏ hơn viewport → nới ra bằng viewport để Center() canh giữa
+          width: max(constraints.maxWidth, contentW),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: horizontalPad / 2),
+            child: Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      ...upperPieces.map(_tile),
+                      if (upperPieces.isNotEmpty)
+                        const SizedBox(width: 0), // bỏ gap cuối
+                    ],
+                  ),
+                  const SizedBox(height: kTileGapV),
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      ...lowerPieces.map(_tile),
+                      if (lowerPieces.isNotEmpty) const SizedBox(width: 0),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+    },
   );
 }
 
-Widget _pieceTile(String piece, bool isSelected, int count, bool canSelect) {
+Widget _pieceTileSized(
+  String piece,
+  bool isSelected,
+  int count,
+  bool canSelect,
+) {
   return Container(
-    width: 50,
-    height: 50,
+    width: kTileSize,
+    height: kTileSize,
     decoration: BoxDecoration(
       color: isSelected ? Colors.yellow.withOpacity(0.5) : Colors.grey[200],
       border: Border.all(
@@ -827,8 +908,8 @@ Widget _pieceTile(String piece, bool isSelected, int count, bool canSelect) {
         Center(
           child: SvgPicture.asset(
             pieceAssetFromSymbol(piece)!,
-            width: 35,
-            height: 35,
+            width: kTileSize * 0.78,
+            height: kTileSize * 0.78,
           ),
         ),
         if (count > 0)
@@ -852,27 +933,6 @@ Widget _pieceTile(String piece, bool isSelected, int count, bool canSelect) {
             ),
           ),
       ],
-    ),
-  );
-}
-
-Widget _pieceFeedback(String piece) {
-  const box = 46.0; // đúng với SizedBox(46)
-  return Material(
-    type: MaterialType.transparency,
-    child: Transform.translate(
-      offset: const Offset(-box / 2, -box / 2), // 👈 kéo tâm về đúng con trỏ
-      child: SizedBox(
-        width: box,
-        height: box,
-        child: Center(
-          child: SvgPicture.asset(
-            pieceAssetFromSymbol(piece)!,
-            width: 42,
-            height: 42,
-          ),
-        ),
-      ),
     ),
   );
 }
@@ -944,8 +1004,13 @@ Widget _buildSetupBoardOverlay(
               top:
                   (isRedAtBottom ? r : 9 - r) * cellH + (cellH - pieceSize) / 2,
               // ✨ Cho quân trên bàn cũng có thể kéo lại
-              child: Draggable<String>(
-                data: board[r][f],
+              child: Draggable<DragData>(
+                data: DragData(
+                  piece: board[r][f],
+                  fromBoard: true,
+                  fromFile: f,
+                  fromRank: r,
+                ),
                 dragAnchorStrategy: pointerDragAnchorStrategy,
                 feedback: Material(
                   type: MaterialType.transparency,
@@ -996,37 +1061,38 @@ Widget _buildSetupBoardOverlay(
               ),
             ),
 
-      // 2) Tap để đặt nhanh (giữ nguyên)
-      Positioned.fill(
-        child: GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onTapDown: (d) {
-            final dx = d.localPosition.dx.clamp(0.0, boardSize.width - 0.01);
-            final dy = d.localPosition.dy.clamp(0.0, boardSize.height - 0.01);
-            final displayFile = (dx / cellW).floor().clamp(0, 8);
-            final displayRank = (dy / cellH).floor().clamp(0, 9);
-            final file = displayFile;
-            final rank = isRedAtBottom ? displayRank : 9 - displayRank;
-            if (state.selectedSetupPiece != null) {
+      // 2) Tap để đặt nhanh (khi đã chọn quân từ thanh)
+      if (state.selectedSetupPiece != null)
+        Positioned.fill(
+          child: GestureDetector(
+            behavior: HitTestBehavior.deferToChild,
+            onTapDown: (d) {
+              final dx = d.localPosition.dx.clamp(0.0, boardSize.width - 0.01);
+              final dy = d.localPosition.dy.clamp(0.0, boardSize.height - 0.01);
+              final displayFile = (dx / cellW).floor().clamp(0, 8);
+              final displayRank = (dy / cellH).floor().clamp(0, 9);
+              final file = displayFile;
+              final rank = isRedAtBottom ? displayRank : 9 - displayRank;
               // Nếu có quân ở ô đích thì xoá trước
               final bd = FenParser.parseBoard(state.fen);
               if (bd[rank][file].isNotEmpty) {
                 controller.removePieceFromBoard(file, rank);
               }
               controller.placePieceOnBoard(file, rank);
-            }
-          },
+            },
+          ),
         ),
-      ),
 
       // 3) ✨ DragTarget đặt CUỐI CÙNG (trên cùng) - chỉ nhận drag, không nhận tap
       Positioned.fill(
-        child: DragTarget<String>(
+        child: DragTarget<DragData>(
           hitTestBehavior:
               HitTestBehavior.translucent, // Thay đổi để không che tap
           builder: (_, __, ___) => const SizedBox.expand(),
-          onWillAcceptWithDetails: (details) => details.data.isNotEmpty,
+          onWillAcceptWithDetails: (details) => details.data.piece.isNotEmpty,
           onAcceptWithDetails: (details) {
+            final payload = details.data;
+
             final box =
                 boardKey.currentContext!.findRenderObject() as RenderBox;
             final local = box.globalToLocal(details.offset);
@@ -1041,14 +1107,26 @@ Widget _buildSetupBoardOverlay(
             final file = displayFile;
             final rank = isRedAtBottom ? displayRank : 9 - displayRank;
 
-            // Nếu có quân ở ô đích thì xoá trước
-            final bd = FenParser.parseBoard(state.fen);
-            if (bd[rank][file].isNotEmpty) {
-              controller.removePieceFromBoard(file, rank);
+            if (payload.fromBoard) {
+              // DI CHUYỂN TRONG BÀN – không đụng setupPieces
+              // Bỏ qua nếu thả vào chính ô của nó
+              if (payload.fromFile != file || payload.fromRank != rank) {
+                controller.movePieceOnBoard(
+                  payload.fromFile!,
+                  payload.fromRank!,
+                  file,
+                  rank,
+                );
+              }
+            } else {
+              // ĐẶT TỪ THANH CỜ – đếm số lượng như cũ
+              final bd = FenParser.parseBoard(state.fen);
+              if (bd[rank][file].isNotEmpty) {
+                controller.removePieceFromBoard(file, rank);
+              }
+              controller.selectSetupPiece(payload.piece);
+              controller.placePieceOnBoard(file, rank);
             }
-
-            controller.selectSetupPiece(details.data);
-            controller.placePieceOnBoard(file, rank);
           },
         ),
       ),
