@@ -438,7 +438,7 @@ class BoardController extends StateNotifier<BoardState> {
         // Failsafe: auto-commit after animation duration in case the
         // widget callback is skipped due to rebuilds
         _animationAutoCommit?.cancel();
-        _animationAutoCommit = Timer(const Duration(milliseconds: 120), () {
+        _animationAutoCommit = Timer(const Duration(milliseconds: 80), () {
           if (state.pendingAnimation != null) {
             AppLogger().log('Auto-commit animated move (failsafe)');
             commitAnimatedMove();
@@ -446,7 +446,7 @@ class BoardController extends StateNotifier<BoardState> {
         });
         // Additional watchdog: force clear if animation is stuck for too long
         _animationWatchdog?.cancel();
-        _animationWatchdog = Timer(const Duration(milliseconds: 2000), () {
+        _animationWatchdog = Timer(const Duration(milliseconds: 1000), () {
           if (state.pendingAnimation != null) {
             AppLogger().log(
               'Animation watchdog: force clearing stuck animation',
@@ -1009,7 +1009,7 @@ class BoardController extends StateNotifier<BoardState> {
 
         // Thời gian nghĩ tối thiểu cho fallback case
         final elapsed = DateTime.now().difference(startedAt);
-        final minThink = const Duration(milliseconds: 250);
+        final minThink = const Duration(milliseconds: 150); // giảm từ 250ms
         if (elapsed < minThink) {
           AppLogger().log(
             'Engine fallback thinking too fast (${elapsed.inMilliseconds}ms), waiting ${(minThink - elapsed).inMilliseconds}ms more',
@@ -1057,7 +1057,7 @@ class BoardController extends StateNotifier<BoardState> {
       _checkmateTimeoutTimer?.cancel();
 
       // Set timeout to check for checkmate after 1 second
-      _checkmateTimeoutTimer = Timer(const Duration(seconds: 1), () {
+      _checkmateTimeoutTimer = Timer(const Duration(milliseconds: 500), () {
         AppLogger().log('Checkmate timeout triggered - checking game status');
         _checkGameStatusForNoMoves();
       });
@@ -1223,7 +1223,7 @@ class BoardController extends StateNotifier<BoardState> {
 
     // Auto-commit after animation duration
     _animationAutoCommit?.cancel();
-    _animationAutoCommit = Timer(const Duration(milliseconds: 120), () {
+    _animationAutoCommit = Timer(const Duration(milliseconds: 80), () {
       if (state.pendingAnimation != null) {
         AppLogger().log('Auto-commit engine animated move (failsafe)');
         commitEngineAnimatedMove();
@@ -1232,7 +1232,7 @@ class BoardController extends StateNotifier<BoardState> {
 
     // Additional watchdog: force clear if animation is stuck for too long
     _animationWatchdog?.cancel();
-    _animationWatchdog = Timer(const Duration(milliseconds: 800), () {
+    _animationWatchdog = Timer(const Duration(milliseconds: 1000), () {
       if (state.pendingAnimation != null) {
         AppLogger().log(
           'Engine animation watchdog: force clearing stuck animation',
@@ -1336,7 +1336,7 @@ class BoardController extends StateNotifier<BoardState> {
     GameNotificationCenter.show(
       message: message,
       backgroundColor: backgroundColor ?? Colors.red,
-      duration: duration ?? const Duration(seconds: 3),
+      duration: duration ?? const Duration(seconds: 2), // giảm từ 3s
     );
   }
 
@@ -1351,7 +1351,7 @@ class BoardController extends StateNotifier<BoardState> {
       try {
         await _engine!.stop(); // Dừng phân tích hiện tại
         await Future.delayed(
-          const Duration(milliseconds: 50),
+          const Duration(milliseconds: 30), // giảm từ 50ms
         ); // Thay thế waitReady
       } catch (e) {
         AppLogger().log('Error stopping engine analysis: $e');
@@ -1418,7 +1418,7 @@ class BoardController extends StateNotifier<BoardState> {
       await _engine!.setPosition(state.setupFen!, currentMoves());
     }
     await Future.delayed(
-      const Duration(milliseconds: 50),
+      const Duration(milliseconds: 30), // giảm từ 50ms
     ); // Thay thế waitReady
 
     // Only NOW clear animation after everything is set
@@ -1564,25 +1564,25 @@ class BoardController extends StateNotifier<BoardState> {
         _showNotification(
           '$winningPlayer WINS! Checkmate!',
           backgroundColor: Colors.green,
-          duration: const Duration(seconds: 5),
+          duration: const Duration(seconds: 2), // giảm từ 3s // giảm từ 5s
         );
       } else if (isStalemate) {
         _showNotification(
           'DRAW! Stalemate!',
           backgroundColor: Colors.blue,
-          duration: const Duration(seconds: 5),
+          duration: const Duration(seconds: 2), // giảm từ 3s // giảm từ 5s
         );
       } else if (winner != null && winner != 'Draw') {
         _showNotification(
           '$winner WINS! King captured!',
           backgroundColor: Colors.green,
-          duration: const Duration(seconds: 5),
+          duration: const Duration(seconds: 2), // giảm từ 3s // giảm từ 5s
         );
       } else {
         _showNotification(
           'Game state unclear - No moves available',
           backgroundColor: Colors.red,
-          duration: const Duration(seconds: 3),
+          duration: const Duration(seconds: 2), // giảm từ 3s
         );
       }
     } catch (e, st) {
@@ -1643,7 +1643,7 @@ class BoardController extends StateNotifier<BoardState> {
         _showNotification(
           '$winningPlayer WINS! Checkmate!',
           backgroundColor: Colors.green,
-          duration: const Duration(seconds: 5),
+          duration: const Duration(seconds: 2), // giảm từ 3s // giảm từ 5s
         );
         return; // Don't check other conditions if checkmate
       }
@@ -1656,7 +1656,7 @@ class BoardController extends StateNotifier<BoardState> {
         _showNotification(
           '$winner WINS! King captured!',
           backgroundColor: Colors.green,
-          duration: const Duration(seconds: 5),
+          duration: const Duration(seconds: 2), // giảm từ 3s // giảm từ 5s
         );
         return; // Don't check other conditions if game is over
       }
@@ -1671,7 +1671,7 @@ class BoardController extends StateNotifier<BoardState> {
         _showNotification(
           '$currentPlayer is in CHECK!',
           backgroundColor: Colors.orange,
-          duration: const Duration(seconds: 4),
+          duration: const Duration(seconds: 2), // giảm từ 4s
         );
       } else if (isStalemate) {
         // Check for stalemate only if not in check and game is not over
@@ -1679,12 +1679,22 @@ class BoardController extends StateNotifier<BoardState> {
         _showNotification(
           'DRAW! Stalemate!',
           backgroundColor: Colors.blue,
-          duration: const Duration(seconds: 5),
+          duration: const Duration(seconds: 2), // giảm từ 3s // giảm từ 5s
         );
       }
     } catch (e, stackTrace) {
       AppLogger().error('Error checking game status', e, stackTrace);
     }
+  }
+
+  // Chuyển đổi FEN từ ký hiệu nội bộ sang chuẩn engine
+  String _toEngineFen(String fen) {
+    // Đổi H/h -> N/n (mã), E/e -> B/b (tượng) để khớp chuẩn XQFEN engine
+    return fen
+        .replaceAll('H', 'N')
+        .replaceAll('h', 'n')
+        .replaceAll('E', 'B')
+        .replaceAll('e', 'b');
   }
 
   // Analyze current position
@@ -1723,17 +1733,11 @@ class BoardController extends StateNotifier<BoardState> {
     // Clear previous best lines when starting a fresh analysis
     state = state.copyWith(bestLines: [], isEngineThinking: true);
 
-    // Đảm bảo MultiPV đúng theo mode
-    final desired = state.isVsEngineMode ? 2 : 1;
-    if (state.multiPv != desired) {
-      state = state.copyWith(multiPv: desired);
-    }
-
-    // ĐẢM BẢO MultiPV đúng theo UI trước khi phân tích
+    // ĐẢM BẢO MultiPV đúng theo UI trước khi phân tích (không ép)
     try {
       await _engine!.setMultiPV(state.multiPv);
       await Future.delayed(
-        const Duration(milliseconds: 50),
+        const Duration(milliseconds: 30), // giảm từ 50ms
       ); // Thay thế waitReady
     } catch (_) {}
 
@@ -1744,7 +1748,7 @@ class BoardController extends StateNotifier<BoardState> {
       if (state.isSetupMode) {
         await analyzeTopMoves(
           engine: _engine!,
-          fen: state.fen,
+          fen: _toEngineFen(state.fen), // ✅ Chuẩn hóa FEN cho engine
           depth: state.analysisDepth,
           numMoves: state.multiPv,
           moves: [], // No moves in setup mode
@@ -1809,7 +1813,7 @@ class BoardController extends StateNotifier<BoardState> {
       await _engine!.setPosition(newFen, state.moves.take(newPointer).toList());
     }
     await Future.delayed(
-      const Duration(milliseconds: 50),
+      const Duration(milliseconds: 30), // giảm từ 50ms
     ); // Thay thế waitReady
     await _analyzePosition();
   }
@@ -1856,7 +1860,7 @@ class BoardController extends StateNotifier<BoardState> {
       await _engine!.setPosition(newFen, state.moves.take(newPointer).toList());
     }
     await Future.delayed(
-      const Duration(milliseconds: 50),
+      const Duration(milliseconds: 30), // giảm từ 50ms
     ); // Thay thế waitReady
     await _analyzePosition();
   }
@@ -2047,7 +2051,7 @@ class BoardController extends StateNotifier<BoardState> {
     }
   }
 
-  Future<void> startReplay(List<String> moves, {int delayMs = 1000}) async {
+  Future<void> startReplay(List<String> moves, {int delayMs = 500}) async {
     _replayMoves = List.from(moves);
     _replayIndex = 0;
 
@@ -2254,8 +2258,11 @@ class BoardController extends StateNotifier<BoardState> {
   }
 
   void setSettings(int depth, int multiPV) {
-    // Ép MultiPV theo mode: nếu đang đánh với máy thì phải là 2
-    final effectiveMultiPv = state.isVsEngineMode ? 2 : multiPV;
+    // Nếu đang đánh với máy và muốn hiển thị phân tích tốt nhất, dùng min 2
+    // Nhưng vẫn cho phép người dùng chọn nhiều hơn (3, 4...)
+    final effectiveMultiPv = state.isVsEngineMode
+        ? (multiPV < 2 ? 2 : multiPV)
+        : multiPV;
 
     state = state.copyWith(analysisDepth: depth, multiPv: effectiveMultiPv);
 
@@ -2271,6 +2278,12 @@ class BoardController extends StateNotifier<BoardState> {
   // Setup mode methods
   void enterSetupMode() {
     AppLogger().log('Entering setup mode');
+
+    // ✅ Nếu đang ở chế độ đánh với máy, phải dừng lại để máy không tự đi
+    if (state.isVsEngineMode) {
+      AppLogger().log('Stopping vs engine mode before entering setup mode');
+      stopVsEngineMode();
+    }
 
     // Initialize setup pieces (standard Xiangqi set)
     final setupPieces = <String, int>{
@@ -2452,28 +2465,53 @@ class BoardController extends StateNotifier<BoardState> {
     if (isCheckmate) {
       final sideToMove = FenParser.getSideToMove(state.fen);
       final winningPlayer = sideToMove == 'w' ? 'Black' : 'Red';
+
+      // Khóa bàn cờ khi checkmate ở setup mode
+      state = state.copyWith(
+        isInCheck: true,
+        isCheckmate: true,
+        isStalemate: false,
+        gameWinner: winningPlayer,
+        boardLocked: true, // ✅ Khóa bàn cờ
+      );
+
       _showNotification(
         'Setup position is already checkmate! $winningPlayer wins.',
         backgroundColor: Colors.orange,
-        duration: const Duration(seconds: 4),
+        duration: const Duration(seconds: 3), // giảm từ 4s
       );
       return;
     }
 
     if (isStalemate) {
+      // Khóa bàn cờ khi stalemate ở setup mode
+      state = state.copyWith(
+        isInCheck: false,
+        isCheckmate: false,
+        isStalemate: true,
+        gameWinner: 'Draw',
+        boardLocked: true, // ✅ Khóa bàn cờ
+      );
+
       _showNotification(
         'Setup position is already stalemate! Game is a draw.',
         backgroundColor: Colors.blue,
-        duration: const Duration(seconds: 4),
+        duration: const Duration(seconds: 3), // giảm từ 4s
       );
       return;
     }
 
     if (winner != null && winner != 'Draw') {
+      // Khóa bàn cờ khi đã có winner ở setup mode
+      state = state.copyWith(
+        gameWinner: winner,
+        boardLocked: true, // ✅ Khóa bàn cờ
+      );
+
       _showNotification(
         'Setup position already has a winner: $winner',
         backgroundColor: Colors.orange,
-        duration: const Duration(seconds: 4),
+        duration: const Duration(seconds: 3), // giảm từ 4s
       );
       return;
     }
@@ -2485,7 +2523,7 @@ class BoardController extends StateNotifier<BoardState> {
       selectedSetupPiece: null,
       moves: const [], // Start fresh moves history from setup position
       pointer: 0,
-      setupFen: state.fen, // Save setup FEN as starting position
+      setupFen: _toEngineFen(state.fen), // ✅ Lưu FEN đúng chuẩn engine
       bestLines: const [], // Clear any previous analysis arrows
       boardLocked: false, // Mở khóa khi bắt đầu game từ setup
     );

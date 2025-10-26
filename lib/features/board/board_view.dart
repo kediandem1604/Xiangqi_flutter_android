@@ -66,7 +66,7 @@ class _BoardViewState extends ConsumerState<BoardView>
   // (tuỳ chọn) mượt hơn: opacity cho overlay (mũi tên, chấm…)
   late final AnimationController _fadeCtrl = AnimationController(
     vsync: this,
-    duration: const Duration(milliseconds: 80), // giảm từ 120ms
+    duration: const Duration(milliseconds: 50), // giảm từ 80ms
   );
   late final Animation<double> _fade = CurvedAnimation(
     parent: _fadeCtrl,
@@ -84,14 +84,14 @@ class _BoardViewState extends ConsumerState<BoardView>
     super.didChangeDependencies();
 
     // Delay nhỏ để đảm bảo SVG được render trước
-    Future.delayed(const Duration(milliseconds: 30), () {
-      // giảm từ 50ms
+    Future.delayed(const Duration(milliseconds: 20), () {
+      // giảm từ 30ms
       if (mounted) setState(() => _boardReady = true);
     });
 
     // Delay thêm để đảm bảo quân cờ được render trước mũi tên
-    Future.delayed(const Duration(milliseconds: 60), () {
-      // giảm từ 100ms
+    Future.delayed(const Duration(milliseconds: 40), () {
+      // giảm từ 60ms
       if (mounted) {
         setState(() {
           _piecesReady = true;
@@ -402,7 +402,7 @@ class _AnimatedPieceState extends State<_AnimatedPiece>
   void initState() {
     super.initState();
     _controller = AnimationController(
-      duration: const Duration(milliseconds: 300),
+      duration: const Duration(milliseconds: 150), // giảm từ 300ms
       vsync: this,
     );
 

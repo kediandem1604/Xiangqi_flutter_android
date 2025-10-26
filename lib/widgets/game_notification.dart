@@ -37,7 +37,7 @@ class GameNotification extends StatefulWidget {
     required this.message,
     this.backgroundColor = Colors.red,
     this.textColor = Colors.white,
-    this.duration = const Duration(seconds: 3),
+    this.duration = const Duration(seconds: 2), // giảm từ 3s
     this.onDismiss,
   });
 
@@ -56,7 +56,7 @@ class _GameNotificationState extends State<GameNotification>
     super.initState();
 
     _animationController = AnimationController(
-      duration: const Duration(milliseconds: 300),
+      duration: const Duration(milliseconds: 200), // giảm từ 300ms
       vsync: this,
     );
 
