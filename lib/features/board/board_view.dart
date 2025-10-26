@@ -329,6 +329,11 @@ class _BoardViewState extends ConsumerState<BoardView>
     final anim = state.pendingAnimation;
     if (anim == null) return const SizedBox.shrink();
 
+    // ✅ Guard: chặn hiển thị animation nếu không ở vs-engine mode hoặc đang setup
+    if (!state.isVsEngineMode || state.isSetupMode) {
+      return const SizedBox.shrink();
+    }
+
     final pieceSize = (cellW * 0.8).clamp(30.0, 60.0);
 
     // Calculate display positions based on isRedAtBottom

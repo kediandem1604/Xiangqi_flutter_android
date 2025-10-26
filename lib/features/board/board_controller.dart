@@ -1247,6 +1247,15 @@ class BoardController extends StateNotifier<BoardState> {
   bool _committingEngineAnim = false;
 
   Future<void> commitEngineAnimatedMove() async {
+    // ✅ Guard quan trọng: CHẶN TOÀN BỘ nếu không ở vs-engine mode hoặc đang setup
+    if (!state.isVsEngineMode || state.isSetupMode) {
+      AppLogger().log(
+        'BLOCKED: Attempted to commit engine move but not in vs-engine mode or in setup mode',
+      );
+      state = state.copyWith(pendingAnimation: null);
+      return;
+    }
+
     if (_committingEngineAnim) return; // ✅ chống re-entrancy
     final anim = state.pendingAnimation;
     if (anim == null) return;
@@ -1974,20 +1983,36 @@ class BoardController extends StateNotifier<BoardState> {
   }
 
   void stopVsEngineMode() {
-    _vsEngineTimer?.cancel();
-    _checkmateTimeoutTimer?.cancel();
+    AppLogger().log('Stopping vs engine mode');
 
-    // Set MultiPV về 1 khi thoát khỏi chế độ đánh với máy
+    // ✅ Hủy tất cả timers
+    _vsEngineTimer?.cancel();
+    _vsEngineTimer = null;
+    _checkmateTimeoutTimer?.cancel();
+    _checkmateTimeoutTimer = null;
+    _animationAutoCommit?.cancel();
+    _animationAutoCommit = null;
+    _animationWatchdog?.cancel();
+    _animationWatchdog = null;
+
+    // ✅ Dừng search hiện tại
+    try {
+      _engine?.stop();
+    } catch (_) {}
+
+    // ✅ Set MultiPV về 1 khi thoát khỏi chế độ đánh với máy
     if (_engine != null) {
       _engine!.setMultiPV(1);
     }
 
+    // ✅ Xóa animation nếu có
     state = state.copyWith(
       isVsEngineMode: false,
       vsEngineDifficulty: null,
       isEngineThinking: false,
       multiPv: 1, // QUAN TRỌNG: cập nhật state.multiPv
       boardLocked: false, // Mở khóa khi thoát chế độ đánh với máy
+      pendingAnimation: null, // Xóa animation
     );
 
     AppLogger().log('Stopped vs engine mode - MultiPV reset to 1');
