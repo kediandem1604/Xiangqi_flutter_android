@@ -171,6 +171,21 @@ class _XiangqiHomePageState extends ConsumerState<XiangqiHomePage> {
         title: const Text('Xiangqi Engine'),
         backgroundColor: Colors.orange[200],
         actions: [
+          // Auto-execute best move
+          Consumer(
+            builder: (context, ref, _) {
+              final st = ref.watch(boardControllerProvider);
+              final controller = ref.read(boardControllerProvider.notifier);
+              return IconButton(
+                icon: const Icon(Icons.bolt),
+                onPressed: () async {
+                  await controller.executeBestMove();
+                },
+                tooltip: 'Tự động đi nước cờ tốt nhất',
+                color: st.bestLines.isNotEmpty ? Colors.blue : Colors.grey,
+              );
+            },
+          ),
           // Toggle best moves visibility
           IconButton(
             icon: Icon(
@@ -211,9 +226,9 @@ class _XiangqiHomePageState extends ConsumerState<XiangqiHomePage> {
               Expanded(
                 child: Container(
                   color: const Color(0xFFFDF7F2), // Màu nền nhạt như trong ảnh
-          child: ListView(
-            padding: EdgeInsets.zero,
-            children: [
+                  child: ListView(
+                    padding: EdgeInsets.zero,
+                    children: [
                       // Nhóm 1: Chế độ chơi
                       _buildMenuItem(
                         icon: Icons.sports_esports,
@@ -247,14 +262,14 @@ class _XiangqiHomePageState extends ConsumerState<XiangqiHomePage> {
                       _buildMenuItem(
                         icon: Icons.settings,
                         title: 'Cài đặt engine',
-                onTap: () {
-                  Navigator.pop(context);
-                  showDialog(
-                    context: context,
-                    builder: (context) => const EngineSettingsDialog(),
-                  );
-                },
-              ),
+                        onTap: () {
+                          Navigator.pop(context);
+                          showDialog(
+                            context: context,
+                            builder: (context) => const EngineSettingsDialog(),
+                          );
+                        },
+                      ),
                       _buildMenuItem(
                         icon: Icons.grid_view,
                         title: 'Setup Board',
@@ -317,21 +332,21 @@ class _XiangqiHomePageState extends ConsumerState<XiangqiHomePage> {
       ),
       body: GameNotificationOverlay(
         child: SingleChildScrollView(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
+          padding: const EdgeInsets.all(16.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
               // Engine status
-            if (_engineInitialized)
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 8,
-                ),
-                decoration: BoxDecoration(
-                  color: Colors.grey[200],
-                  borderRadius: BorderRadius.circular(8),
-                ),
+              if (_engineInitialized)
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 8,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.grey[200],
+                    borderRadius: BorderRadius.circular(8),
+                  ),
                   child: Consumer(
                     builder: (context, ref, _) {
                       final boardState = ref.watch(boardControllerProvider);
@@ -362,17 +377,17 @@ class _XiangqiHomePageState extends ConsumerState<XiangqiHomePage> {
                       );
                     },
                   ),
-              ),
-            const SizedBox(height: 16),
+                ),
+              const SizedBox(height: 16),
 
               // Board view
-            if (_engineInitialized) ...[
-              Consumer(
-                builder: (context, ref, _) {
-                  final st = ref.watch(boardControllerProvider);
-                  return Center(
-                    child: SizedBox(
-                      width: MediaQuery.of(context).size.width * 0.9,
+              if (_engineInitialized) ...[
+                Consumer(
+                  builder: (context, ref, _) {
+                    final st = ref.watch(boardControllerProvider);
+                    return Center(
+                      child: SizedBox(
+                        width: MediaQuery.of(context).size.width * 0.9,
                         child: Stack(
                           children: [
                             BoardView(
@@ -387,52 +402,52 @@ class _XiangqiHomePageState extends ConsumerState<XiangqiHomePage> {
                               ),
                           ],
                         ),
-                    ),
-                  );
-                },
-              ),
-              const SizedBox(height: 12),
+                      ),
+                    );
+                  },
+                ),
+                const SizedBox(height: 12),
 
                 // Move history and controls - only show when not in setup mode
-              Consumer(
-                builder: (context, ref, _) {
-                  final st = ref.watch(boardControllerProvider);
-                  final ctrl = ref.read(boardControllerProvider.notifier);
+                Consumer(
+                  builder: (context, ref, _) {
+                    final st = ref.watch(boardControllerProvider);
+                    final ctrl = ref.read(boardControllerProvider.notifier);
 
                     // Hide move history and controls when in setup mode
                     if (st.isSetupMode) {
                       return const SizedBox.shrink();
                     }
 
-                  return Column(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: Colors.grey[100],
-                          border: Border.all(color: Colors.grey[300]!),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: Align(
-                          alignment: Alignment.centerLeft,
-                          child: Text(
+                    return Column(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: Colors.grey[100],
+                            border: Border.all(color: Colors.grey[300]!),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Align(
+                            alignment: Alignment.centerLeft,
+                            child: Text(
                               'Move History: ${st.moves.take(st.pointer).join(' ')}',
-                            style: const TextStyle(
-                              fontFamily: 'monospace',
-                              fontSize: 12,
+                              style: const TextStyle(
+                                fontFamily: 'monospace',
+                                fontSize: 12,
+                              ),
                             ),
                           ),
                         ),
-                      ),
-                      const SizedBox(height: 8),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                        children: [
-                          OutlinedButton(
+                        const SizedBox(height: 8),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                          children: [
+                            OutlinedButton(
                               onPressed: st.canBack ? ctrl.back : null,
-                            child: const Text('Back'),
-                          ),
-                          OutlinedButton(
+                              child: const Text('Back'),
+                            ),
+                            OutlinedButton(
                               onPressed: () async {
                                 await ctrl.resetWithCallback(() {
                                   // Reset UI settings to default
@@ -473,19 +488,19 @@ class _XiangqiHomePageState extends ConsumerState<XiangqiHomePage> {
                                   const Text('Reset'),
                                 ],
                               ),
-                          ),
-                          OutlinedButton(
+                            ),
+                            OutlinedButton(
                               onPressed: st.canNext ? ctrl.next : null,
-                            child: const Text('Next'),
-                          ),
-                        ],
-                      ),
-                    ],
-                  );
-                },
-              ),
-            ],
-            const SizedBox(height: 16),
+                              child: const Text('Next'),
+                            ),
+                          ],
+                        ),
+                      ],
+                    );
+                  },
+                ),
+              ],
+              const SizedBox(height: 16),
 
               // Best moves panel - only show when not in setup mode
               Consumer(
@@ -504,10 +519,10 @@ class _XiangqiHomePageState extends ConsumerState<XiangqiHomePage> {
                 },
               ),
 
-            if (_isLoading)
-              const Padding(
-                padding: EdgeInsets.all(16.0),
-                child: Center(child: CircularProgressIndicator()),
+              if (_isLoading)
+                const Padding(
+                  padding: EdgeInsets.all(16.0),
+                  child: Center(child: CircularProgressIndicator()),
                 ),
             ],
           ),
@@ -860,7 +875,7 @@ class _LockChainsOverlayState extends State<_LockChainsOverlay>
                 ),
                 child: const Icon(Icons.lock, size: 56, color: Colors.white),
               ),
-              ),
+            ),
           ],
         ),
       ),
