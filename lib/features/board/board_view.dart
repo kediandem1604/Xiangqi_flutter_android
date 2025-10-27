@@ -356,7 +356,7 @@ class _BoardViewState extends ConsumerState<BoardView>
       return const SizedBox.shrink();
     }
 
-    final pieceSize = (cellW * 0.8).clamp(30.0, 60.0);
+    final pieceSize = (cellW * 1.1).clamp(30.0, 120.0);
 
     // Calculate display positions based on isRedAtBottom
     final fromDisplayRank = state.isRedAtBottom
@@ -429,7 +429,7 @@ class _AnimatedPieceState extends State<_AnimatedPiece>
   void initState() {
     super.initState();
     _controller = AnimationController(
-      duration: const Duration(milliseconds: 150), // giảm từ 300ms
+      duration: const Duration(milliseconds: 100), // 60fps smooth
       vsync: this,
     );
 
@@ -619,7 +619,7 @@ List<Widget> _buildPiecesFromFen(
 
         final isSelected =
             state.selectedFile == file && state.selectedRank == rank;
-        final pieceSize = (cellW * 0.8).clamp(30.0, 60.0);
+        final pieceSize = (cellW * 1.1).clamp(30.0, 120.0);
 
         // Get piece asset using common function
         final pieceAsset = pieceAssetFromSymbol(piece);
@@ -1008,7 +1008,7 @@ Widget _buildSetupBoardOverlay(
   final board = FenParser.parseBoard(state.fen);
   final cellW = boardSize.width / 9;
   final cellH = boardSize.height / 10;
-  final pieceSize = (cellW < cellH ? cellW : cellH) * 0.8;
+  final pieceSize = (cellW < cellH ? cellW : cellH) * 1.1;
 
   return Stack(
     children: [
