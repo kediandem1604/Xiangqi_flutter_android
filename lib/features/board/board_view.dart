@@ -806,32 +806,36 @@ Widget _buildSetupPiecesTray(
 
     return Padding(
       padding: const EdgeInsets.only(right: kTileGapH),
-      child: Draggable<DragData>(
-        data: DragData(piece: piece, fromBoard: false),
-        dragAnchorStrategy: pointerDragAnchorStrategy,
-        feedback: Material(
-          type: MaterialType.transparency,
-          child: Transform.translate(
-            offset: const Offset(-kFeedbackSize / 2, -kFeedbackSize / 2),
-            child: SizedBox(
-              width: kFeedbackSize,
-              height: kFeedbackSize,
-              child: Center(
-                child: SvgPicture.asset(
-                  pieceAssetFromSymbol(piece)!,
-                  width: kFeedbackSize * 0.9,
-                  height: kFeedbackSize * 0.9,
+      child: Listener(
+        onPointerDown: canSelect
+            ? (_) {
+                controller.selectSetupPiece(piece);
+              }
+            : null,
+        child: Draggable<DragData>(
+          data: DragData(piece: piece, fromBoard: false),
+          dragAnchorStrategy: pointerDragAnchorStrategy,
+          feedback: Material(
+            type: MaterialType.transparency,
+            child: Transform.translate(
+              offset: const Offset(-kFeedbackSize / 2, -kFeedbackSize / 2),
+              child: SizedBox(
+                width: kFeedbackSize,
+                height: kFeedbackSize,
+                child: Center(
+                  child: SvgPicture.asset(
+                    pieceAssetFromSymbol(piece)!,
+                    width: kFeedbackSize * 0.9,
+                    height: kFeedbackSize * 0.9,
+                  ),
                 ),
               ),
             ),
           ),
-        ),
-        childWhenDragging: Opacity(
-          opacity: 0.35,
-          child: _pieceTileSized(piece, isSelected, count, canSelect),
-        ),
-        child: GestureDetector(
-          onTap: canSelect ? () => controller.selectSetupPiece(piece) : null,
+          childWhenDragging: Opacity(
+            opacity: 0.35,
+            child: _pieceTileSized(piece, isSelected, count, canSelect),
+          ),
           child: _pieceTileSized(piece, isSelected, count, canSelect),
         ),
       ),
@@ -892,6 +896,8 @@ Widget _pieceTileSized(
   int count,
   bool canSelect,
 ) {
+  final opacity = canSelect ? 1.0 : 0.3; // Làm nhạt khi hết quân
+
   return Container(
     width: kTileSize,
     height: kTileSize,
@@ -906,10 +912,13 @@ Widget _pieceTileSized(
     child: Stack(
       children: [
         Center(
-          child: SvgPicture.asset(
-            pieceAssetFromSymbol(piece)!,
-            width: kTileSize * 0.78,
-            height: kTileSize * 0.78,
+          child: Opacity(
+            opacity: opacity,
+            child: SvgPicture.asset(
+              pieceAssetFromSymbol(piece)!,
+              width: kTileSize * 0.78,
+              height: kTileSize * 0.78,
+            ),
           ),
         ),
         if (count > 0)
@@ -995,7 +1004,72 @@ Widget _buildSetupBoardOverlay(
 
   return Stack(
     children: [
-      // 1) Vẽ quân đang có (dưới)
+      // A) Tap để đặt nhanh (chỉ chạy khi đã chọn quân từ khay)
+      Positioned.fill(
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTapDown: (d) {
+            if (state.selectedSetupPiece == null) return;
+            final dx = d.localPosition.dx.clamp(0.0, boardSize.width - 0.01);
+            final dy = d.localPosition.dy.clamp(0.0, boardSize.height - 0.01);
+            final displayFile = (dx / cellW).floor().clamp(0, 8);
+            final displayRank = (dy / cellH).floor().clamp(0, 9);
+            final file = displayFile;
+            final rank = isRedAtBottom ? displayRank : 9 - displayRank;
+
+            final bd = FenParser.parseBoard(state.fen);
+            if (bd[rank][file].isNotEmpty) {
+              controller.removePieceFromBoard(file, rank);
+            }
+            controller.placePieceOnBoard(file, rank);
+          },
+        ),
+      ),
+
+      // B) DragTarget nhận thả (drop) nhưng KHÔNG chặn pointer cho Draggable bên dưới
+      Positioned.fill(
+        child: DragTarget<DragData>(
+          hitTestBehavior: HitTestBehavior.translucent,
+          builder: (_, __, ___) => const IgnorePointer(
+            ignoring: true, // để không chặn tap/drag start
+            child: SizedBox.expand(),
+          ),
+          onWillAcceptWithDetails: (details) => details.data.piece.isNotEmpty,
+          onAcceptWithDetails: (details) {
+            final payload = details.data;
+            final box =
+                boardKey.currentContext!.findRenderObject() as RenderBox;
+            final local = box.globalToLocal(details.offset);
+
+            final dx = local.dx.clamp(0.0, boardSize.width - 0.01);
+            final dy = local.dy.clamp(0.0, boardSize.height - 0.01);
+            final displayFile = (dx / cellW).floor().clamp(0, 8);
+            final displayRank = (dy / cellH).floor().clamp(0, 9);
+            final file = displayFile;
+            final rank = isRedAtBottom ? displayRank : 9 - displayRank;
+
+            if (payload.fromBoard) {
+              if (payload.fromFile != file || payload.fromRank != rank) {
+                controller.movePieceOnBoard(
+                  payload.fromFile!,
+                  payload.fromRank!,
+                  file,
+                  rank,
+                );
+              }
+            } else {
+              final bd = FenParser.parseBoard(state.fen);
+              if (bd[rank][file].isNotEmpty) {
+                controller.removePieceFromBoard(file, rank);
+              }
+              controller.selectSetupPiece(payload.piece);
+              controller.placePieceOnBoard(file, rank);
+            }
+          },
+        ),
+      ),
+
+      // C) Vẽ quân đang có (Draggable) — đặt CUỐI CÙNG để luôn nhận drag start
       for (int r = 0; r < 10; r++)
         for (int f = 0; f < 9; f++)
           if (board[r][f].isNotEmpty)
@@ -1003,7 +1077,6 @@ Widget _buildSetupBoardOverlay(
               left: f * cellW + (cellW - pieceSize) / 2,
               top:
                   (isRedAtBottom ? r : 9 - r) * cellH + (cellH - pieceSize) / 2,
-              // ✨ Cho quân trên bàn cũng có thể kéo lại
               child: Draggable<DragData>(
                 data: DragData(
                   piece: board[r][f],
@@ -1018,7 +1091,7 @@ Widget _buildSetupBoardOverlay(
                     offset: Offset(
                       -(pieceSize * 1.2) / 2,
                       -(pieceSize * 1.2) / 2,
-                    ), // 👈
+                    ),
                     child: SizedBox(
                       width: pieceSize * 1.2,
                       height: pieceSize * 1.2,
@@ -1060,76 +1133,6 @@ Widget _buildSetupBoardOverlay(
                 ),
               ),
             ),
-
-      // 2) Tap để đặt nhanh (khi đã chọn quân từ thanh)
-      if (state.selectedSetupPiece != null)
-        Positioned.fill(
-          child: GestureDetector(
-            behavior: HitTestBehavior.deferToChild,
-            onTapDown: (d) {
-              final dx = d.localPosition.dx.clamp(0.0, boardSize.width - 0.01);
-              final dy = d.localPosition.dy.clamp(0.0, boardSize.height - 0.01);
-              final displayFile = (dx / cellW).floor().clamp(0, 8);
-              final displayRank = (dy / cellH).floor().clamp(0, 9);
-              final file = displayFile;
-              final rank = isRedAtBottom ? displayRank : 9 - displayRank;
-              // Nếu có quân ở ô đích thì xoá trước
-              final bd = FenParser.parseBoard(state.fen);
-              if (bd[rank][file].isNotEmpty) {
-                controller.removePieceFromBoard(file, rank);
-              }
-              controller.placePieceOnBoard(file, rank);
-            },
-          ),
-        ),
-
-      // 3) ✨ DragTarget đặt CUỐI CÙNG (trên cùng) - chỉ nhận drag, không nhận tap
-      Positioned.fill(
-        child: DragTarget<DragData>(
-          hitTestBehavior:
-              HitTestBehavior.translucent, // Thay đổi để không che tap
-          builder: (_, __, ___) => const SizedBox.expand(),
-          onWillAcceptWithDetails: (details) => details.data.piece.isNotEmpty,
-          onAcceptWithDetails: (details) {
-            final payload = details.data;
-
-            final box =
-                boardKey.currentContext!.findRenderObject() as RenderBox;
-            final local = box.globalToLocal(details.offset);
-
-            // Bảo vệ
-            if (cellW <= 0 || cellH <= 0) return;
-
-            final dx = local.dx.clamp(0.0, boardSize.width - 0.01);
-            final dy = local.dy.clamp(0.0, boardSize.height - 0.01);
-            final displayFile = (dx / cellW).floor().clamp(0, 8);
-            final displayRank = (dy / cellH).floor().clamp(0, 9);
-            final file = displayFile;
-            final rank = isRedAtBottom ? displayRank : 9 - displayRank;
-
-            if (payload.fromBoard) {
-              // DI CHUYỂN TRONG BÀN – không đụng setupPieces
-              // Bỏ qua nếu thả vào chính ô của nó
-              if (payload.fromFile != file || payload.fromRank != rank) {
-                controller.movePieceOnBoard(
-                  payload.fromFile!,
-                  payload.fromRank!,
-                  file,
-                  rank,
-                );
-              }
-            } else {
-              // ĐẶT TỪ THANH CỜ – đếm số lượng như cũ
-              final bd = FenParser.parseBoard(state.fen);
-              if (bd[rank][file].isNotEmpty) {
-                controller.removePieceFromBoard(file, rank);
-              }
-              controller.selectSetupPiece(payload.piece);
-              controller.placePieceOnBoard(file, rank);
-            }
-          },
-        ),
-      ),
     ],
   );
 }

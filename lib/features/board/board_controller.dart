@@ -300,12 +300,12 @@ class BoardController extends StateNotifier<BoardState> {
           AppLogger().log(
             'Selected piece. possibleMoves=${possibleMoves.length}',
           );
-          state = state.copyWith(
-            selectedFile: file,
-            selectedRank: rank,
-            possibleMoves: possibleMoves,
+      state = state.copyWith(
+        selectedFile: file,
+        selectedRank: rank,
+        possibleMoves: possibleMoves,
             // Không ẩn mũi tên khi chọn quân
-          );
+      );
         }
       }
     } else {
@@ -347,16 +347,16 @@ class BoardController extends StateNotifier<BoardState> {
       }
 
       // Allow move if the click is near one of possible moves (tolerance)
-      final click = Offset(file.toDouble(), rank.toDouble());
-      Offset? chosen;
-      double best = 1e9;
-      for (final m in state.possibleMoves) {
-        final d = (m.dx - click.dx).abs() + (m.dy - click.dy).abs();
-        if (d < best) {
-          best = d;
-          chosen = m;
+        final click = Offset(file.toDouble(), rank.toDouble());
+        Offset? chosen;
+        double best = 1e9;
+        for (final m in state.possibleMoves) {
+          final d = (m.dx - click.dx).abs() + (m.dy - click.dy).abs();
+          if (d < best) {
+            best = d;
+            chosen = m;
+          }
         }
-      }
       // Accept if within ~0.3 cell from a legal destination (more precise touch area)
       if (chosen == null || best > 0.3) {
         // Not near any legal destination
@@ -404,33 +404,33 @@ class BoardController extends StateNotifier<BoardState> {
         return;
       }
 
-      final snappedToFile = chosen.dx.round();
-      final snappedToRank = chosen.dy.round();
-      final moveUci = _fileRankToUci(
-        selectedFile,
-        selectedRank,
-        snappedToFile,
-        snappedToRank,
-      );
+          final snappedToFile = chosen.dx.round();
+          final snappedToRank = chosen.dy.round();
+          final moveUci = _fileRankToUci(
+            selectedFile,
+            selectedRank,
+            snappedToFile,
+            snappedToRank,
+          );
       AppLogger().log('Attempt move: $moveUci');
       if (XiangqiRules.isValidMove(state.fen, moveUci)) {
         // Queue animation first; BoardView will commit and then we apply
         final board = FenParser.parseBoard(state.fen);
         final piece = board[selectedRank][selectedFile];
-        state = state.copyWith(
-          pendingAnimation: MoveAnimation(
-            fromFile: selectedFile,
-            fromRank: selectedRank,
-            toFile: snappedToFile,
-            toRank: snappedToRank,
-            piece: piece,
-            moveUci: moveUci,
+          state = state.copyWith(
+            pendingAnimation: MoveAnimation(
+              fromFile: selectedFile,
+              fromRank: selectedRank,
+              toFile: snappedToFile,
+              toRank: snappedToRank,
+              piece: piece,
+              moveUci: moveUci,
             isEngineMove: false, // Player move
-          ),
+            ),
           // Clear selection immediately when move is confirmed
-          selectedFile: null,
-          selectedRank: null,
-          possibleMoves: [],
+            selectedFile: null,
+            selectedRank: null,
+            possibleMoves: [],
           // ✨ Ẩn toàn bộ mũi tên ngay khi người chơi click ô đích
           arrows: const <ArrowData>[],
         );
@@ -1062,8 +1062,8 @@ class BoardController extends StateNotifier<BoardState> {
         _checkGameStatusForNoMoves();
       });
 
-      return '';
-    }
+    return '';
+  }
 
     // Cancel timeout if we got best moves
     _checkmateTimeoutTimer?.cancel();
@@ -1279,22 +1279,22 @@ class BoardController extends StateNotifier<BoardState> {
         newMoves.removeRange(state.pointer, newMoves.length);
       }
       // Add engine move to history to keep startpos + moves consistent
-      newMoves.add(anim.moveUci);
+    newMoves.add(anim.moveUci);
 
       // Update FEN after the move
       final newFen = FenParser.applyMove(state.fen, anim.moveUci);
 
-      state = state.copyWith(
-        fen: newFen,
-        moves: newMoves,
+    state = state.copyWith(
+      fen: newFen,
+      moves: newMoves,
         pointer: newMoves.length,
-        redToMove: !state.redToMove, // Switch sides
+      redToMove: !state.redToMove, // Switch sides
         bestLines: [],
         canBack: newMoves.isNotEmpty,
         canNext: false,
-        selectedFile: null,
-        selectedRank: null,
-        possibleMoves: [],
+      selectedFile: null,
+      selectedRank: null,
+      possibleMoves: [],
         isEngineThinking: false,
         isEngineTurn: false, // Switch back to human turn
         engineMoveCount:
@@ -1423,7 +1423,7 @@ class BoardController extends StateNotifier<BoardState> {
     // Set position FIRST - use startpos or original setupFen, not current fen
     if (_isFromStartpos()) {
       await _engine!.setPosition('startpos', currentMoves());
-    } else {
+      } else {
       await _engine!.setPosition(state.setupFen!, currentMoves());
     }
     await Future.delayed(
@@ -1755,8 +1755,8 @@ class BoardController extends StateNotifier<BoardState> {
 
       // In setup mode, use current FEN directly without moves
       if (state.isSetupMode) {
-        await analyzeTopMoves(
-          engine: _engine!,
+      await analyzeTopMoves(
+        engine: _engine!,
           fen: _toEngineFen(state.fen), // ✅ Chuẩn hóa FEN cho engine
           depth: state.analysisDepth,
           numMoves: state.multiPv,
