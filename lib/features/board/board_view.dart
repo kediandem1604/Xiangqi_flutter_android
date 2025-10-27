@@ -794,12 +794,12 @@ Widget _buildSetupPiecesTray(
   final upperPieces = pieces.take(upperCount).toList();
   final lowerPieces = pieces.skip(upperCount).take(lowerCount).toList();
 
-  double _rowWidth(int n) {
+  double rowWidth(int n) {
     if (n <= 0) return 0;
     return n * kTileSize + (n - 1) * kTileGapH;
   }
 
-  Widget _tile(String piece) {
+  Widget tile(String piece) {
     final count = state.setupPieces[piece] ?? 0;
     final isSelected = state.selectedSetupPiece == piece;
     final canSelect = count > 0;
@@ -815,6 +815,14 @@ Widget _buildSetupPiecesTray(
         child: Draggable<DragData>(
           data: DragData(piece: piece, fromBoard: false),
           dragAnchorStrategy: pointerDragAnchorStrategy,
+          onDragStarted: () {
+            // bật dots theo loại quân đang kéo
+            controller.selectSetupPiece(piece);
+          },
+          onDragEnd: (_) {
+            // dù thả hụt hay đặt xong, dots phải tắt (onAccept cũng đã clear)
+            controller.clearSelectedSetupPiece();
+          },
           feedback: Material(
             type: MaterialType.transparency,
             child: Transform.translate(
@@ -846,8 +854,8 @@ Widget _buildSetupPiecesTray(
     builder: (context, constraints) {
       // độ rộng thực sự của 2 hàng (lấy hàng rộng hơn)
       final contentRowW = max(
-        _rowWidth(upperPieces.length),
-        _rowWidth(lowerPieces.length),
+        rowWidth(upperPieces.length),
+        rowWidth(lowerPieces.length),
       );
       // padding hai bên của khay
       const double horizontalPad = 16.0;
@@ -867,7 +875,7 @@ Widget _buildSetupPiecesTray(
                   Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      ...upperPieces.map(_tile),
+                      ...upperPieces.map(tile),
                       if (upperPieces.isNotEmpty)
                         const SizedBox(width: 0), // bỏ gap cuối
                     ],
@@ -876,7 +884,7 @@ Widget _buildSetupPiecesTray(
                   Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      ...lowerPieces.map(_tile),
+                      ...lowerPieces.map(tile),
                       if (lowerPieces.isNotEmpty) const SizedBox(width: 0),
                     ],
                   ),
@@ -1026,14 +1034,11 @@ Widget _buildSetupBoardOverlay(
         ),
       ),
 
-      // B) DragTarget nhận thả (drop) nhưng KHÔNG chặn pointer cho Draggable bên dưới
+      // B) DragTarget nhận thả (drop)
       Positioned.fill(
         child: DragTarget<DragData>(
           hitTestBehavior: HitTestBehavior.translucent,
-          builder: (_, __, ___) => const IgnorePointer(
-            ignoring: true, // để không chặn tap/drag start
-            child: SizedBox.expand(),
-          ),
+          builder: (_, __, ___) => const SizedBox.expand(),
           onWillAcceptWithDetails: (details) => details.data.piece.isNotEmpty,
           onAcceptWithDetails: (details) {
             final payload = details.data;
@@ -1069,7 +1074,16 @@ Widget _buildSetupBoardOverlay(
         ),
       ),
 
-      // C) Vẽ quân đang có (Draggable) — đặt CUỐI CÙNG để luôn nhận drag start
+      // C) HINT DOTS – chỉ hiện khi đang chọn từ khay hoặc đang kéo
+      if (state.selectedSetupPiece != null)
+        _buildSetupHintDots(
+          state: state,
+          boardSize: boardSize,
+          isRedAtBottom: isRedAtBottom,
+          pieceSymbol: state.selectedSetupPiece!,
+        ),
+
+      // D) Vẽ quân đang có (Draggable) — đặt CUỐI CÙNG để luôn nhận drag start
       for (int r = 0; r < 10; r++)
         for (int f = 0; f < 9; f++)
           if (board[r][f].isNotEmpty)
@@ -1085,6 +1099,14 @@ Widget _buildSetupBoardOverlay(
                   fromRank: r,
                 ),
                 dragAnchorStrategy: pointerDragAnchorStrategy,
+                onDragStarted: () {
+                  // bật dots theo quân đang kéo (tận dụng selectedSetupPiece)
+                  controller.selectSetupPiece(board[r][f]);
+                },
+                onDragEnd: (_) {
+                  // nếu thả hụt (không vào DragTarget), dots phải tắt
+                  controller.clearSelectedSetupPiece();
+                },
                 feedback: Material(
                   type: MaterialType.transparency,
                   child: Transform.translate(
@@ -1118,7 +1140,10 @@ Widget _buildSetupBoardOverlay(
                   ),
                 ),
                 child: GestureDetector(
-                  onTap: () => controller.removePieceFromBoard(f, r),
+                  onTap: () {
+                    controller.clearSelectedSetupPiece();
+                    controller.removePieceFromBoard(f, r);
+                  },
                   child: SizedBox(
                     width: pieceSize,
                     height: pieceSize,
@@ -1135,6 +1160,104 @@ Widget _buildSetupBoardOverlay(
             ),
     ],
   );
+}
+
+Widget _buildSetupHintDots({
+  required BoardState state,
+  required Size boardSize,
+  required bool isRedAtBottom,
+  required String pieceSymbol,
+}) {
+  final board = FenParser.parseBoard(state.fen);
+  final cellW = boardSize.width / 9;
+  final cellH = boardSize.height / 10;
+
+  // hàm kiểm tra hợp lệ theo loại quân
+  bool isValid(int f, int r, String s) {
+    final type = s.toLowerCase();
+    final isRed = s == s.toUpperCase();
+
+    if (type == 'k') {
+      return isRed
+          ? (r >= 7 && r <= 9 && f >= 3 && f <= 5)
+          : (r <= 2 && f >= 3 && f <= 5);
+    }
+    if (type == 'a') {
+      if (isRed) {
+        if (!(r >= 7 && r <= 9 && f >= 3 && f <= 5)) return false;
+        return (f == 3 && (r == 7 || r == 9)) ||
+            (f == 4 && r == 8) ||
+            (f == 5 && (r == 7 || r == 9));
+      } else {
+        if (!(r <= 2 && f >= 3 && f <= 5)) return false;
+        return (f == 3 && (r == 0 || r == 2)) ||
+            (f == 4 && r == 1) ||
+            (f == 5 && (r == 0 || r == 2));
+      }
+    }
+    if (type == 'e') {
+      const black = <(int, int)>{
+        (2, 0),
+        (6, 0),
+        (0, 2),
+        (4, 2),
+        (8, 2),
+        (2, 4),
+        (6, 4),
+      };
+      const red = <(int, int)>{
+        (2, 9),
+        (6, 9),
+        (0, 7),
+        (4, 7),
+        (8, 7),
+        (2, 5),
+        (6, 5),
+      };
+      return (s == s.toUpperCase())
+          ? red.contains((f, r))
+          : black.contains((f, r));
+    }
+    if (type == 'p') {
+      const evenFiles = <int>{0, 2, 4, 6, 8};
+      if (isRed) {
+        return r <= 4 || ((r == 5 || r == 6) && evenFiles.contains(f));
+      } else {
+        return r >= 5 || ((r == 3 || r == 4) && evenFiles.contains(f));
+      }
+    }
+    // R, H, C đặt tự do
+    return true;
+  }
+
+  final children = <Widget>[];
+  for (int r = 0; r < 10; r++) {
+    for (int f = 0; f < 9; f++) {
+      if (board[r][f].isNotEmpty) continue; // chỉ vẽ ô trống
+      final valid = isValid(f, r, pieceSymbol);
+      if (!valid) continue;
+
+      final cx = f * cellW + cellW / 2;
+      final dispR = isRedAtBottom ? r : 9 - r;
+      final cy = dispR * cellH + cellH / 2;
+
+      children.add(
+        Positioned(
+          left: cx - 6,
+          top: cy - 6,
+          child: Container(
+            width: 12,
+            height: 12,
+            decoration: BoxDecoration(
+              color: Colors.blue.withOpacity(0.5),
+              shape: BoxShape.circle,
+            ),
+          ),
+        ),
+      );
+    }
+  }
+  return IgnorePointer(ignoring: true, child: Stack(children: children));
 }
 
 /// Widget hiển thị icon xích khóa bàn cờ
